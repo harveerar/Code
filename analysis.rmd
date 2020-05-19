@@ -1,0 +1,2331 @@
+---
+title: "BreastNeoAdjuvantAnalysis"
+author: "Harini Veeraraghavan"
+date: "February 6, 2018"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+  require(tidyverse)
+  require(knitr)
+  require(broom)
+  require(FSA)
+  require(lattice)
+  require(multcompView)
+  #require(randomForest)
+  require(pROC)
+  require(ROCR)
+  require(caret)
+
+  require(dplyr)
+
+
+  options(scipen=1, digits=2)
+  
+  # Variants of mean, median etc with na.rm = T
+  min_    <- function(...) min(..., na.rm=T)
+  max_    <- function(...) max(..., na.rm=T)
+  mean_   <- function(...) mean(..., na.rm=T)
+  median_ <- function(...) median(..., na.rm=T)
+  Q1_     <- function(...) quantile(..., probs=0.25, na.rm = TRUE)
+  Q3_     <- function(...) quantile(..., probs=0.75, na.rm = TRUE)
+  sum_    <- function(...) sum(..., na.rm=T)
+
+  colsd_ <- function (x, na.rm=FALSE) apply(X=x, MARGIN=2, FUN=sd, na.rm=na.rm)
+  
+    # function to return counts of samples
+  n_fun <- function(x, y){ # y is position for labels
+    return(data.frame(y, label = paste0("n = ", length(x))))
+  }
+  
+  empty_as_na <- function(x){
+    if("factor" %in% class(x)) x <- as.character(x) ## since ifelse wont work with factors
+    ifelse(as.character(x)!="", x, NA)
+  }
+  
+  smotest <- list(name = "SMOTE with more neighbors!",
+                func = function (x, y) {
+                  library(DMwR)
+                  dat <- if (is.data.frame(x)) x else as.data.frame(x)
+                  dat$.y <- y
+                  dat <- SMOTE(.y ~ ., data = dat, perc.under = 100, perc.over = 300, k = 5)
+                  list(x = dat[, !grepl(".y", colnames(dat), fixed = TRUE)], 
+                       y = dat$.y)
+                  },
+                first = TRUE)
+```
+
+Load the clinical data and outcomes 
+
+```{r, echo=FALSE, warning=FASE, message=FALSE}
+
+  set.seed(1000)
+  train_set <- read.csv("TrainSet.csv", sep=",", head = T)
+  val_set <- read.csv("TestSet.csv", sep= ",", head = T)
+  test_set <- val_set
+  clin.data <- rbind(train_set, test_set)
+  t_set <- rbind(train_set, test_set)
+  
+  train <- train_set$X
+  validation <- val_set$X
+
+  
+  allnames <- names(clin.data)
+  fnames <- allnames[12:length(allnames)]
+  
+  id = grep("bef", allnames)
+  fnamesPre <- allnames[id]
+  id = grep("af", allnames)
+  fnamesAf <- allnames[id]
+  id = grep("diff", allnames)
+  fnamesDiff <- allnames[id]
+  
+  fnamesAll <- c(fnamesPre, fnamesAf, fnamesDiff)
+  
+```
+
+# Difference in outcomes between training and testing cohort
+
+```{r, echo=FALSE, warning=FALSE}
+
+  ## continuous
+  print(wilcox.test(train_set$MaximumResidualDisease, val_set$MaximumResidualDisease))
+ print(quantile(train_set$MaximumResidualDisease))
+ 
+ print(quantile(val_set$MaximumResidualDisease))
+  ## binary
+  print(wilcox.test(as.numeric(train_set$MaximumResidualDisease < 2), as.numeric(val_set$MaximumResidualDisease < 2)))
+
+  print(wilcox.test(train_set$pCR.USA, val_set$pCR.USA))
+  print(sum(as.numeric(train_set$pCR.USA==1)))
+  print(sum(as.numeric(val_set$pCR.USA==1)))
+  
+  
+  print(sum(as.numeric(train_set$pCR.Europe==1)))
+  print(sum(as.numeric(val_set$pCR.Europe==1)))
+  print(wilcox.test(train_set$pCR.Europe, val_set$pCR.Europe))
+  
+  print(wilcox.test(train_set$MolecularSubtype.5way, val_set$MolecularSubtype.5way))
+  
+  print(sum(as.numeric(train_set$MolecularSubtype.5way==1)))
+  print(sum(as.numeric(train_set$MolecularSubtype.5way==2)))
+  print(sum(as.numeric(train_set$MolecularSubtype.5way==3)))
+  print(sum(as.numeric(train_set$MolecularSubtype.5way==4)))
+  
+  print(sum(as.numeric(val_set$MolecularSubtype.5way==1)))
+  print(sum(as.numeric(val_set$MolecularSubtype.5way==2)))
+  print(sum(as.numeric(val_set$MolecularSubtype.5way==3)))
+  print(sum(as.numeric(val_set$MolecularSubtype.5way==4)))
+  
+  print(wilcox.test(train_set$Erstatus, val_set$Erstatus))
+  print(sum(as.numeric(train_set$Erstatus==1)))
+  print(sum(as.numeric(train_set$Erstatus==0)))
+  
+  print(sum(as.numeric(val_set$Erstatus==1)))
+  print(sum(as.numeric(val_set$Erstatus==0)))
+  
+  x1 = sum(as.numeric(train_set$pCR.USA[train_set$MolecularSubtype.5way==1]))
+
+  x2 = sum(as.numeric(train_set$pCR.USA[train_set$MolecularSubtype.5way==2]))
+ 
+  x3 = sum(as.numeric(train_set$pCR.USA[train_set$MolecularSubtype.5way==3]))
+  
+  x4 =  sum(as.numeric(train_set$pCR.USA[train_set$MolecularSubtype.5way==4]))
+ pCR = rep(1:4, times = c(x1, x2, x3, x4))
+
+x1 = sum(as.numeric(train_set$pCR.USA[train_set$MolecularSubtype.5way==4]==0))
+
+x2 = sum(as.numeric(train_set$pCR.USA[train_set$MolecularSubtype.5way==3]==0))
+
+x3 = sum(as.numeric(train_set$pCR.USA[train_set$MolecularSubtype.5way==2]==0))
+
+x4 =  sum(as.numeric(train_set$pCR.USA[train_set$MolecularSubtype.5way==1]==0))
+
+nCR = rep(1:4, times = c(x1,x2,x3,x4))
+
+testres = c(pCR,nCR)
+
+truestat = c(rep(1, sum(as.numeric(train_set$pCR.USA==1))), rep(0, sum(as.numeric(train_set$pCR.USA==0))))
+
+( tab=as.matrix(table(truestat, testres)) )
+library(caTools)
+colAUC(testres, truestat, plotROC=TRUE)
+
+test_set = val_set
+x1 = sum(as.numeric(test_set$pCR.USA[test_set$MolecularSubtype.5way==1]))
+
+  x2 = sum(as.numeric(test_set$pCR.USA[test_set$MolecularSubtype.5way==2]))
+ 
+  x3 = sum(as.numeric(test_set$pCR.USA[test_set$MolecularSubtype.5way==3]))
+  
+  x4 =  sum(as.numeric(test_set$pCR.USA[test_set$MolecularSubtype.5way==4]))
+ pCR = rep(1:4, times = c(x1, x2, x3, x4))
+
+x1 = sum(as.numeric(test_set$pCR.USA[test_set$MolecularSubtype.5way==4]==0))
+
+x2 = sum(as.numeric(test_set$pCR.USA[test_set$MolecularSubtype.5way==3]==0))
+
+x3 = sum(as.numeric(test_set$pCR.USA[test_set$MolecularSubtype.5way==2]==0))
+
+x4 =  sum(as.numeric(test_set$pCR.USA[test_set$MolecularSubtype.5way==1]==0))
+
+nCR = rep(1:4, times = c(x1,x2,x3,x4))
+
+testres = c(pCR,nCR)
+
+truestat = c(rep(1, sum(as.numeric(test_set$pCR.USA==1))), rep(0, sum(as.numeric(test_set$pCR.USA==0))))
+
+( tab=as.matrix(table(truestat, testres)) )
+
+
+```
+
+
+## pCR USA only pre-treatment MRI features
+Use RF classifier to distinguish pCR USA vs. no pCR USA
+
+```{r, echo=FALSE, warning=FALSE}
+  require(mRMRe)
+  require(caret)
+
+  set.seed(1000)
+  
+  means <- colMeans(train_set[, names(train_set)%in% fnamesAll])
+  sds <- colsd_(train_set[,names(train_set) %in% fnamesAll])
+  val_feat <- (val_set - means)/sds
+  
+  Response <- as.factor(train_set$pCR.USA)
+  
+  featuredata <- train_set[, names(train_set) %in% c(fnamesAll, "pCR.USA")]
+  
+  featuredata$pCR.USA <- as.ordered(featuredata$pCR.USA)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesAll)*0.8))
+  
+  train_set$pCR.USA <- replace(train_set$pCR.USA, train_set$pCR.USA == 0, "nCR")
+  train_set$pCR.USA <- replace(train_set$pCR.USA, train_set$pCR.USA == 1, "pCR")
+  train_set$pCR.USA <- as.factor(train_set$pCR.USA)
+  
+  val_set$pCR.USA <- replace(val_set$pCR.USA, val_set$pCR.USA == 0, "nCR")
+  val_set$pCR.USA <- replace(val_set$pCR.USA, val_set$pCR.USA == 1, "pCR")
+  val_set$pCR.USA <- as.factor(val_set$pCR.USA)
+  
+  
+  findx <- unlist(solutions(filter), use.names=FALSE)
+  findx <- findx-1
+  
+  #trainingData <- train_set[,fnamesPre[findx]]
+  
+  trainingData <- train_set[, fnamesAll[findx]]
+  
+  ## pre-select predictors
+  print("GLMNET")
+  objControl <- trainControl(method="cv", number = 3, search = "grid", classProb = TRUE, savePredictions = "final", summaryFunction = twoClassSummary, sampling = "up")
+    eGrid <- expand.grid(.alpha = (1:10)*0.1, .lambda = seq(0.005, 0.1, by=0.005)) #seq(0.01,0.5, by=0.02)) 
+    bestModelGLM <- train(trainingData, train_set$pCR.USA, method = 'glmnet', trControl = objControl, tuneGrid = eGrid, preProcess = c("scale", "center"))
+  plot(bestModelGLM)
+  print(bestModelGLM$results[bestModelGLM$results$alpha==bestModelGLM$bestTune$alpha & bestModelGLM$results$lambda==bestModelGLM$bestTune$lambda,])
+  
+  impFeats <- varImp(bestModelGLM)
+  indxF <- impFeats[[1]]$Overall > 0.1
+  glmFnames <- rownames(impFeats[[1]])
+  bestglmFeats <- glmFnames[indxF]
+
+ 
+  
+  ## Recursive feature elimination RF 
+   rfCtrl <- trainControl(method = "cv", number = 5, classProbs=TRUE, savePredictions = "final", search="grid", summaryFunction=twoClassSummary, sampling = "smote")
+ 
+   rfeCtrl <- rfeControl(functions = caretFuncs, method = "cv", number = 5, returnResamp = "final", verbose = TRUE)
+  # rfFit <- rfe(trainingData[, names(trainingData)%in% fnamesPre[findx]], train_set$pCR.USA, sizes = c(5, 10, 12, 15, 17, 20), rfeControl = rfeCtrl, method = "rf", metric = "ROC", trControl = rfCtrl, ntree = 1000, preProcess = c("scale", "center"))
+  
+   rfFit <- rfe(trainingData[, names(trainingData)%in% bestglmFeats], train_set$pCR.USA, sizes = c(5, 10, 12, 15, 17, 20), rfeControl = rfeCtrl, method = "rf", 
+                metric = "ROC", trControl = rfCtrl, ntree = 1000, preProcess = c("scale", "center"))
+  
+  impRFFeats <- varImp(rfFit$fit)
+  indxF <- impRFFeats[[1]]$Overall > 1
+  RFFnames <- rownames(impRFFeats[[1]])
+  bestRFFeats <- RFFnames[indxF]
+  
+  plot(rfFit$fit)
+  rocRFERFRadPre <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$pCR, ci = TRUE, smooth = FALSE)
+  CM1 <- confusionMatrix(rfFit$fit$pred$pred, rfFit$fit$pred$obs)
+  print(rocRFERFRadPre)
+  
+  require(epiR)
+  
+  
+  ToCSV <- data.frame(cbind(t(CM1$overall), t(CM1$byClass), t(rocRFERFRad$auc), t(rocRFERFRad$ci)))
+  write.csv(ToCSV, file="pCRNoMolecular-OnlyPre.csv")
+  
+  rfFit$optVariables
+  plot(varImp(rfFit$fit))
+  
+  means <- colMeans(train_set[, names(train_set)%in% fnamesAll])
+  sds <- colsd_(train_set[,names(train_set) %in% fnamesAll])
+  val_feat <- (val_set - means)/sds
+  
+  
+  RFValPre <- predict(object = rfFit$fit, val_set[, names(val_set) %in% fnamesPre])
+  CM2 <- confusionMatrix(RFVal, val_set$pCR.USA)
+  #resprob = predict(rfFit$fit, val_set[, names(val_set) %in% fnamesPre[findx]], type="prob")
+  epi.tests(CM2$table)
+  
+  resprob = predict(rfFit$fit, val_set[, names(val_set) %in% fnamesAll], type="prob")
+  rocRFValRadPre <- roc(val_set$pCR.USA, resprob[,2], ci = TRUE, smooth = FALSE)
+  print(rocRFValRadPre)
+  roc.test(rocRFERFRad, rocRFValRad)
+  
+  rC <- data.frame(c(rocRFERFRad$sensitivities, rocRFValRad$sensitivities), c(1.0-rocRFERFRad$specificities, 1.0-rocRFValRad$specificities), c(rep("Cross validation (R)", length(rocRFERFRad$sensitivities)), rep("Test (R)", length(rocRFValRad$sensitivities))))
+  colnames(rC) <- c("Sensitivity", "Specificity", "Cohort")
+  
+    require(wesanderson)
+  
+   RadG1 <- ggplot(rC, aes(Specificity, Sensitivity, color=Cohort, linetype = Cohort)) + geom_path(size=2.0) + scale_linetype_manual(values = c("solid", "solid")) + scale_color_manual(values = wes_palette("Darjeeling")) + theme_pubr(base_size=24) + xlab("1-Specificity") + ylab("Sensitivity\n") + theme(plot.title = element_text(hjust = 0.0), axis.text=element_text(size=24), axis.title = element_text(size=28),  axis.title.x = element_text(size=20), axis.title.y = element_text(size=20)) + theme(axis.text=element_text(size=24, face="bold"), legend.text=element_text(size=24), legend.title = element_blank(), legend.position = c(0.75, 0.35)) + theme(legend.key.height = unit(2, "line")) +guides(linetype = guide_legend(nrow = 2)) +  theme(legend.background = element_rect(fill="white", size=0.25, linetype = "solid", color="black"))
+
+ggsave("FigureROCCurvesPCRUSA-Rad-Jan_13_2020-OnlyRad.tiff", RadG1, dpi=300)
+ggsave("FigureROCCurvesPCRUSA-Rad-Jan_13_2020-OnlyRad.pdf", RadG1, dpi=300)
+
+RadG3Pre<- ggplot(varImp(rfFit$fit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=18), axis.title.y = element_blank())
+ggsave("FigureRFERFFeatureImportancepCRUSARad-Jan_14_2020-OnlyRad.tiff", RadG3Pre, dpi=300)
+ggsave("FigureRFERFFeatureImportancepCRUSARad-Jan_14_2020-OnlyRad.pdf", RadG3, dpi=300)
+
+ t_set <- val_set 
+
+  snames <- bestRFFeats
+  
+  relIndx = rep(TRUE, length(snames))
+  pVals = rep(0, length(snames))
+  for (i in 1 : length(snames)) {
+    
+    p <- wilcox.test(t_set[,names(t_set)%in% snames[i]] ~ pCR.USA, data=t_set)
+    if(p$p.value > 0.05) {
+      relIndx[i] <- FALSE
+      pVals[i] <- p$p.value
+    }
+    else{
+      pVals[i] <- p$p.value
+    }
+  }
+ # p.adjust(pVals[relIndx], method="holm")
+  padjVal <- p.adjust(pVals, method="holm")
+ 
+  require(epiR)
+  
+```
+
+
+
+## pCR USA with pre-NAC and molecular subtype features
+
+```{r, echo=FALSE, warning=FALSE}
+
+  require(mRMRe)
+  require(caret)
+
+  set.seed(1000)
+  
+  means <- colMeans(train_set[, names(train_set)%in% fnamesAll])
+  sds <- colsd_(train_set[,names(train_set) %in% fnamesAll])
+  val_feat <- (val_set - means)/sds
+  
+  Response <- as.factor(train_set$pCR.USA)
+  
+  featuredata <- train_set[, names(train_set) %in% c(fnamesAll, "pCR.USA")]
+  
+  featuredata$pCR.USA <- as.ordered(featuredata$pCR.USA)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesPre)*0.8))
+  
+  train_set$pCR.USA <- replace(train_set$pCR.USA, train_set$pCR.USA == 0, "nCR")
+  train_set$pCR.USA <- replace(train_set$pCR.USA, train_set$pCR.USA == 1, "pCR")
+  train_set$pCR.USA <- as.factor(train_set$pCR.USA)
+  
+  val_set$pCR.USA <- replace(val_set$pCR.USA, val_set$pCR.USA == 0, "nCR")
+  val_set$pCR.USA <- replace(val_set$pCR.USA, val_set$pCR.USA == 1, "pCR")
+  val_set$pCR.USA <- as.factor(val_set$pCR.USA)
+  
+  
+  findx <- unlist(solutions(filter), use.names=FALSE)
+  findx <- findx-1
+  
+  trainingData <- train_set[,c("MolecularSubtype.5way", fnamesAll[findx])]
+  trainingData <- train_set[,c("MolecularSubtype.5way", fnamesAll)]
+  
+  trainingData$MolecularSubtype.5way = as.factor(trainingData$MolecularSubtype.5way)
+  ## one hot encode categorical variables
+dmy <- dummyVars(" ~ .", data = trainingData)
+onehotData <- data.frame(predict(dmy, newdata = trainingData))
+  
+  
+  ## Recursive feature elimination RF 
+   rfCtrl <- trainControl(method = "cv", number = 5, classProbs=TRUE, savePredictions = "final", search="grid", summaryFunction=twoClassSummary, sampling = "smote")
+ 
+   rfeCtrl <- rfeControl(functions = caretFuncs, method = "cv", number = 5, returnResamp = "final", verbose = TRUE)
+   
+   rfFit <- rfe(trainingData[, names(trainingData)%in% fnamesAll], train_set$pCR.USA, sizes = c(5, 10, 12, 15, 17, 20), rfeControl = rfeCtrl, method = "rf", 
+                metric = "ROC", trControl = rfCtrl, ntree = 1000, preProcess = c("scale", "center"))
+  
+   
+  impRFFeats <- varImp(rfFit$fit)
+  indxF <- impRFFeats[[1]]$Overall > 1
+  RFFnames <- rownames(impRFFeats[[1]])
+  bestRFFeats <- RFFnames[indxF]
+  
+  plot(rfFit$fit)
+  rocRFERFRadPreMS <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$pCR, ci = TRUE, smooth = FALSE)
+  CM1MS <- confusionMatrix(rfFit$fit$pred$pred, rfFit$fit$pred$obs)
+  print(rocRFERFRadPreMS)
+  
+  ToCSV <- data.frame(cbind(t(CM1MS$overall), t(CM1MS$byClass), t(rocRFERFRadPreMS$auc), t(rocRFERFRadPreMS$ci)))
+  write.csv(ToCSV, file="pCRNoMolecular-OnlyPreMS.csv")
+  
+  rfFit$optVariables
+  plot(varImp(rfFit$fit))
+  
+  means <- colMeans(train_set[, names(train_set)%in% fnamesPre])
+  sds <- colsd_(train_set[,names(train_set) %in% fnamesPre])
+  val_feat <- (val_set - means)/sds
+  
+  
+  RFValPreMS <- predict(object = rfFit$fit, val_set[, names(val_set) %in% c("MolecularSubtype.5way", fnamesPre)])
+  CM2MS <- confusionMatrix(RFVal, val_set$pCR.USA)
+  resprob = predict(rfFit$fit, val_set[, names(val_set) %in% fnamesPre], type="prob")
+  rocRFValRadPreMS <- roc(val_set$pCR.USA, resprob[,2], ci = TRUE, smooth = FALSE)
+  print(rocRFValRadPreMS)
+  
+  roc.test(rocRFERFRadPreMS, rocRFValRadPreMS)
+  
+  rC <- data.frame(c(rocRFERFRad$sensitivities, rocRFValRad$sensitivities), c(1.0-rocRFERFRad$specificities, 1.0-rocRFValRad$specificities), c(rep("Cross validation (R)", length(rocRFERFRad$sensitivities)), rep("Test (R)", length(rocRFValRad$sensitivities))))
+  colnames(rC) <- c("Sensitivity", "Specificity", "Cohort")
+  
+    require(wesanderson)
+  
+   RadG1Pre <- ggplot(rC, aes(Specificity, Sensitivity, color=Cohort, linetype = Cohort)) + geom_path(size=2.0) + scale_linetype_manual(values = c("solid", "solid")) + scale_color_manual(values = wes_palette("Darjeeling")) + theme_pubr(base_size=24) + xlab("1-Specificity") + ylab("Sensitivity\n") + theme(plot.title = element_text(hjust = 0.0), axis.text=element_text(size=24), axis.title = element_text(size=28),  axis.title.x = element_text(size=20), axis.title.y = element_text(size=20)) + theme(axis.text=element_text(size=24, face="bold"), legend.text=element_text(size=24), legend.title = element_blank(), legend.position = c(0.75, 0.35)) + theme(legend.key.height = unit(2, "line")) +guides(linetype = guide_legend(nrow = 2)) +  theme(legend.background = element_rect(fill="white", size=0.25, linetype = "solid", color="black"))
+
+ggsave("FigureROCCurvesPCRUSA-Rad-Dec_14_2018-OnlyPre.tiff", RadG1, dpi=300)
+ggsave("FigureROCCurvesPCRUSA-Rad-Dec_14_2018-OnlyPre.pdf", RadG1, dpi=300)
+
+RadG3Pre<- ggplot(varImp(rfFit$fit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=18), axis.title.y = element_blank())
+ggsave("FigureRFERFFeatureImportancepCRUSARad-Dec_14_2018-OnlyPre.tiff", RadG3Pre, dpi=300)
+ggsave("FigureRFERFFeatureImportancepCRUSARad-Dec_142018-OnlyPre.pdf", RadG3, dpi=300)
+
+ t_set <- val_set 
+
+  snames <- bestRFFeats
+  
+  relIndx = rep(TRUE, length(snames))
+  pVals = rep(0, length(snames))
+  for (i in 1 : length(snames)) {
+    
+    p <- wilcox.test(t_set[,names(t_set)%in% snames[i]] ~ pCR.USA, data=t_set)
+    if(p$p.value > 0.05) {
+      relIndx[i] <- FALSE
+      pVals[i] <- p$p.value
+    }
+    else{
+      pVals[i] <- p$p.value
+    }
+  }
+ # p.adjust(pVals[relIndx], method="holm")
+  padjVal <- p.adjust(pVals, method="holm")
+ 
+  legend_title = "Response"
+  
+  RadG2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$diff.Pre.mean, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 1.5, label = "P = 0.016", size=11)
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("FigurePCRUSA_Radiomics-DiffPreMean-OnlyPre.tiff", RadG2, dpi=300)
+  quantile(t_set$diff.Pre.mean[t_set$pCR.USA=="nCR"])
+  quantile(t_set$diff.Pre.mean[t_set$pCR.USA=="pCR"])
+
+  
+```
+
+
+
+
+##PCR USA
+
+Use RF classifier to distinguish pCR USA vs. no pCR USA
+
+```{r, echo=FALSE, warning=FALSE}
+  require(mRMRe)
+  require(caret)
+
+  set.seed(1000)
+  
+  means <- colMeans(train_set[, names(train_set)%in% fnamesAll])
+  sds <- colsd_(train_set[,names(train_set) %in% fnamesAll])
+  val_feat <- (val_set - means)/sds
+  
+  Response <- as.factor(train_set$pCR.USA)
+  
+  featuredata <- train_set[, names(train_set) %in% c(fnamesAll, "pCR.USA")]
+  
+  featuredata$pCR.USA <- as.ordered(featuredata$pCR.USA)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesAll)*0.8))
+  
+  train_set$pCR.USA <- replace(train_set$pCR.USA, train_set$pCR.USA == 0, "nCR")
+  train_set$pCR.USA <- replace(train_set$pCR.USA, train_set$pCR.USA == 1, "pCR")
+  train_set$pCR.USA <- as.factor(train_set$pCR.USA)
+  
+  val_set$pCR.USA <- replace(val_set$pCR.USA, val_set$pCR.USA == 0, "nCR")
+  val_set$pCR.USA <- replace(val_set$pCR.USA, val_set$pCR.USA == 1, "pCR")
+  val_set$pCR.USA <- as.factor(val_set$pCR.USA)
+  
+  
+  findx <- unlist(solutions(filter), use.names=FALSE)
+  findx <- findx-1
+  
+  trainingData <- train_set[,fnamesAll[findx]]
+  
+ 
+  ## pre-select predictors
+  print("GLMNET")
+  objControl <- trainControl(method="cv", number = 3, search = "grid", classProb = TRUE, savePredictions = "final", summaryFunction = twoClassSummary, sampling = "up")
+  eGrid <- expand.grid(.alpha = (1:10)*0.1, .lambda = seq(0.005, 0.1, by=0.005)) #seq(0.01,0.5, by=0.02)) 
+    bestModelGLM <- train(trainingData, train_set$pCR.USA, method = 'glmnet', trControl = objControl, tuneGrid = eGrid, preProcess = c("scale", "center"))
+  plot(bestModelGLM)
+  print(bestModelGLM$results[bestModelGLM$results$alpha==bestModelGLM$bestTune$alpha & bestModelGLM$results$lambda==bestModelGLM$bestTune$lambda,])
+  
+  impFeats <- varImp(bestModelGLM)
+  indxF <- impFeats[[1]]$Overall > 1
+  glmFnames <- rownames(impFeats[[1]])
+  bestglmFeats <- glmFnames[indxF]
+
+ 
+  
+  ## Recursive feature elimination RF 
+   rfCtrl <- trainControl(method = "cv", number = 5, classProbs=TRUE, savePredictions = "final", search="grid", summaryFunction=twoClassSummary, sampling = smotest)
+ 
+   rfeCtrl <- rfeControl(functions = caretFuncs, method = "cv", number = 5, returnResamp = "final", verbose = TRUE)
+   rfFit <- rfe(trainingData[, names(trainingData)%in% bestglmFeats], train_set$pCR.USA, sizes = c(5, 10, 12, 15, 17, 20), rfeControl = rfeCtrl, method = "rf", 
+                metric = "ROC", trControl = rfCtrl, ntree = 1000, preProcess = c("scale", "center"))
+  
+  impRFFeats <- varImp(rfFit$fit)
+  indxF <- impRFFeats[[1]]$Overall > 0.1
+  RFFnames <- rownames(impRFFeats[[1]])
+  bestRFFeats <- RFFnames[indxF]
+  
+  plot(rfFit$fit)
+  rocRFERFRad.All <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$pCR, ci = TRUE, smooth = FALSE)
+  CM1 <- confusionMatrix(rfFit$fit$pred$pred, rfFit$fit$pred$obs)
+  print(rocRFERFRad.All)
+  
+  require(epiR)
+  epi.tests(CM1$table)
+  ToCSV <- data.frame(cbind(t(CM1$overall), t(CM1$byClass), t(rocRFERFRad$auc), t(rocRFERFRad$ci)))
+  write.csv(ToCSV, file="pCRNoMolecular.csv")
+  
+  rfFit$optVariables
+  plot(varImp(rfFit$fit))
+  
+  means <- colMeans(train_set[, names(train_set)%in% fnamesAll])
+  sds <- colsd_(train_set[,names(train_set) %in% fnamesAll])
+  val_feat <- (val_set - means)/sds
+  
+  
+  RFVal.All <- predict(object = rfFit$fit, val_set[, names(val_set) %in% bestglmFeats])
+  CM2 <- confusionMatrix(RFVal, val_set$pCR.USA)
+  resprob = predict(rfFit$fit, val_set[, names(val_set) %in% bestglmFeats], type="prob")
+  rocRFValRad.All <- roc(val_set$pCR.USA, resprob[,2], ci = TRUE, smooth = FALSE)
+  print(rocRFValRad.All)
+  roc.test(rocRFERFRad.All, rocRFValRad.All)
+  
+  epi.tests(CM1$table)
+  
+  epi.tests(CM2$table)
+  
+  rC <- data.frame(c(rocRFERFRad$sensitivities, rocRFValRad$sensitivities), c(1.0-rocRFERFRad$specificities, 1.0-rocRFValRad$specificities), c(rep("Cross validation (R)", length(rocRFERFRad$sensitivities)), rep("Test (R)", length(rocRFValRad$sensitivities))))
+  colnames(rC) <- c("Sensitivity", "Specificity", "Cohort")
+  
+    require(wesanderson)
+  
+   RadG1 <- ggplot(rC, aes(Specificity, Sensitivity, color=Cohort, linetype = Cohort)) + geom_path(size=2.0) + scale_linetype_manual(values = c("solid", "solid")) + scale_color_manual(values = wes_palette("Darjeeling")) + theme_pubr(base_size=24) + xlab("1-Specificity") + ylab("Sensitivity\n") + theme(plot.title = element_text(hjust = 0.0), axis.text=element_text(size=24), axis.title = element_text(size=28),  axis.title.x = element_text(size=20), axis.title.y = element_text(size=20)) + theme(axis.text=element_text(size=24, face="bold"), legend.text=element_text(size=24), legend.title = element_blank(), legend.position = c(0.75, 0.35)) + theme(legend.key.height = unit(2, "line")) +guides(linetype = guide_legend(nrow = 2)) +  theme(legend.background = element_rect(fill="white", size=0.25, linetype = "solid", color="black"))
+
+library(gridExtra)
+ mytheme <- gridExtra::ttheme_default(
+  core = list(fg_params=list(cex = 1.5)),
+  colhead = list(fg_params=list(cex = 1.0)),
+  rowhead = list(fg_params=list(cex = 1.0)))
+  
+
+mydata <- data.frame(TPR=c(0.53,0.54),TNR=c(0.79,0.86),PPV=c(0.82,0.86), NPV = c(0.49, 0.54))
+mytable <- cbind(Accuracy = c("Cross-Validation", "Test"), mydata)
+g2 <- g1 + annotation_custom(tableGrob(mytable, theme=mytheme), xmin=0.3, xmax=0.96, ymin=0.0, ymax=0.2)
+g2$layers[[2]]$aes_params$textsize = 6
+
+ggsave("FigureROCCurvesPCRUSA-Rad-July_22_2019.tiff", g1, dpi=300)
+ggsave("FigureROCCurvesPCRUSA-Rad-July_22_2019.pdf", g1, dpi=300)
+
+g3<- ggplot(varImp(rfFit$fit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=18), axis.title.y = element_blank())
+ggsave("FigureRFERFFeatureImportancepCRUSARad-Jan_14_2020.tiff", g3, dpi=300)
+ggsave("FigureRFERFFeatureImportancepCRUSARad-Jan_14_2020.pdf", g3, dpi=300)
+
+ t_set <- rbind(train_set, val_set) 
+
+  snames <- bestRFFeats
+  
+  relIndx = rep(TRUE, length(snames))
+  pVals = rep(0, length(snames))
+  for (i in 1 : length(snames)) {
+    
+    p <- wilcox.test(t_set[,names(t_set)%in% snames[i]] ~ pCR.USA, data=t_set)
+    if(p$p.value > 0.05) {
+      relIndx[i] <- FALSE
+      pVals[i] <- p$p.value
+    }
+    else{
+      pVals[i] <- p$p.value
+    }
+  }
+ # p.adjust(pVals[relIndx], method="holm")
+  padjVal <- p.adjust(pVals, method="BH")
+ 
+  legend_title = "Response"
+  
+  g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$diff.Pre.mean, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 1.5, label = "P < 0.001", size=11) + ylim(-1.0, 2.0) + ylab("Diff Pre-contrast Mean")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("FigurePCRUSA_Radiomics-DiffPreMean.tiff", g2, dpi=300)
+  quantile(t_set$diff.Pre.mean[t_set$pCR.USA=="nCR"])
+  quantile(t_set$diff.Pre.mean[t_set$pCR.USA=="pCR"])
+ 
+  
+   g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$af.Post1.mean, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 55, label = "P = 0.003", size=11) + ylim(0.0, 60.0) + ylab("Post-NAC post1 Mean")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("~/pubs/pubs/2020/12_17_2019_BreastCancerResearch/FIGURES/FigurePCRUSA_Radiomics-AfPost1Mean.tiff", g2, dpi=300)
+ 
+  
+   g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$diff.Post2.Skewness, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 45, label = "P = 0.003", size=11) + ylim(-3.0, 60.0) + ylab("Diffence Post2 Skewness")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("~/pubs/pubs/2020/12_17_2019_BreastCancerResearch/FIGURES/FigurePCRUSA_Radiomics-DiffPost2Skew.tiff", g2, dpi=300)
+ 
+  
+   g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$diff.Post1.mean, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 25, label = "P = 0.003", size=11) + ylim(-1.0, 50.0) + ylab("Difference Post1 mean")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("~/pubs/pubs/2020/12_17_2019_BreastCancerResearch/FIGURES/FigurePCRUSA_Radiomics-DiffPost1Mean.tiff", g2, dpi=300)
+ 
+  
+  g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$diff.Post1.Gab0.Energy, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 4, label = "P = 0.003", size=11) + ylim(-1.0, 5.0) + ylab("Difference Post1 Gabor (0, 1.414) energy")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("~/pubs/pubs/2020/12_17_2019_BreastCancerResearch/FIGURES/FigurePCRUSA_Radiomics-DiffPost1Gab0Energy.tiff", g2, dpi=300)
+ 
+  
+   g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$diff.Pre.Contrast, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 15, label = "P = 0.007", size=11) + ylim(-2.0, 45.0) + ylab("Difference Pre-contrast contrast")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("~/pubs/pubs/2020/12_17_2019_BreastCancerResearch/FIGURES/FigurePCRUSA_Radiomics-DiffPreContrast.tiff", g2, dpi=300)
+ 
+ 
+    g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$af.Pre.Contrast, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 25, label = "P = 0.007", size=11) + ylim(-1.0, 50.0) + ylab("Post-NAC  Pre-contrast contrast")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("~/pubs/pubs/2020/12_17_2019_BreastCancerResearch/FIGURES/FigurePCRUSA_Radiomics-AfPreContrast.tiff", g2, dpi=300)
+  
+  
+    g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$af.Post1.SD, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 125, label = "P = 0.002", size=11) + ylim(-1.0, 190.0) + ylab("Post-NAC  Post1 SD")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("~/pubs/pubs/2020/12_17_2019_BreastCancerResearch/FIGURES/FigurePCRUSA_Radiomics-AfPost1SD.tiff", g2, dpi=300)
+ 
+  
+  g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$diff.Post1.Gab90.Entropy, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 4, label = "P = 0.035", size=11) + ylim(-1.0, 5.0) + ylab("Post-NAC Post1 Gabor (90, 1.414) entropy")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("~/pubs/pubs/2020/12_17_2019_BreastCancerResearch/FIGURES/FigurePCRUSA_Radiomics-afPost1Gab90Entropy.tiff", g2, dpi=300)
+ 
+  
+    
+  save(rfFit, file = "PrePostRadiomicsOnlyModel.rda")
+```
+
+
+** construct a radiomics model without the mean intensity features**
+```{r, echo=FALSE, warning=FALSE}
+
+  featMean = grep("*mean", fnamesAll, value=TRUE)
+
+  fnamesUse <- fnamesAll[!fnamesAll %in% featMean]
+  
+  means <- colMeans(train_set[, names(train_set)%in% fnamesUse])
+  sds <- colsd_(train_set[,names(train_set) %in% fnamesUse])
+  val_feat <- (val_set - means)/sds
+  
+  Response <- as.factor(train_set$pCR.USA)
+  
+  featuredata <- train_set[, names(train_set) %in% c(fnamesUse, "pCR.USA")]
+  
+  featuredata$pCR.USA <- as.ordered(featuredata$pCR.USA)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesAll)*0.8))
+  
+  train_set$pCR.USA <- replace(train_set$pCR.USA, train_set$pCR.USA == 0, "nCR")
+  train_set$pCR.USA <- replace(train_set$pCR.USA, train_set$pCR.USA == 1, "pCR")
+  train_set$pCR.USA <- as.factor(train_set$pCR.USA)
+  
+  val_set$pCR.USA <- replace(val_set$pCR.USA, val_set$pCR.USA == 0, "nCR")
+  val_set$pCR.USA <- replace(val_set$pCR.USA, val_set$pCR.USA == 1, "pCR")
+  val_set$pCR.USA <- as.factor(val_set$pCR.USA)
+  
+  
+  findx <- unlist(solutions(filter), use.names=FALSE)
+  findx <- findx-1
+  
+  trainingData <- train_set[,fnamesUse[findx]]
+  
+ 
+  ## pre-select predictors
+  print("GLMNET")
+  objControl <- trainControl(method="cv", number = 3, search = "grid", classProb = TRUE, savePredictions = "final", summaryFunction = twoClassSummary, sampling = "up")
+  eGrid <- expand.grid(.alpha = (1:10)*0.1, .lambda = seq(0.005, 0.1, by=0.005)) #seq(0.01,0.5, by=0.02)) 
+    bestModelGLM <- train(trainingData, train_set$pCR.USA, method = 'glmnet', trControl = objControl, tuneGrid = eGrid, preProcess = c("scale", "center"))
+  plot(bestModelGLM)
+  print(bestModelGLM$results[bestModelGLM$results$alpha==bestModelGLM$bestTune$alpha & bestModelGLM$results$lambda==bestModelGLM$bestTune$lambda,])
+  
+  impFeats <- varImp(bestModelGLM)
+  indxF <- impFeats[[1]]$Overall > 1
+  glmFnames <- rownames(impFeats[[1]])
+  bestglmFeats <- glmFnames[indxF]
+
+ 
+  
+  ## Recursive feature elimination RF 
+   rfCtrl <- trainControl(method = "cv", number = 5, classProbs=TRUE, savePredictions = "final", search="grid", summaryFunction=twoClassSummary, sampling = smotest)
+ 
+   rfeCtrl <- rfeControl(functions = caretFuncs, method = "cv", number = 5, returnResamp = "final", verbose = TRUE)
+   rfFit <- rfe(trainingData[, names(trainingData)%in% bestglmFeats], train_set$pCR.USA, sizes = c(5, 10, 12, 15, 17, 20), rfeControl = rfeCtrl, method = "rf", 
+                metric = "ROC", trControl = rfCtrl, ntree = 1000, preProcess = c("scale", "center"))
+  
+  impRFFeats <- varImp(rfFit$fit)
+  indxF <- impRFFeats[[1]]$Overall > 0.1
+  RFFnames <- rownames(impRFFeats[[1]])
+  bestRFFeats <- RFFnames[indxF]
+  
+  plot(rfFit$fit)
+  rocRFERFRad <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$pCR, ci = TRUE, smooth = FALSE)
+  CM1 <- confusionMatrix(rfFit$fit$pred$pred, rfFit$fit$pred$obs)
+  print(rocRFERFRad)
+  
+  require(epiR)
+  epi.tests(CM1$table)
+  ToCSV <- data.frame(cbind(t(CM1$overall), t(CM1$byClass), t(rocRFERFRad$auc), t(rocRFERFRad$ci)))
+  write.csv(ToCSV, file="pCRNoMolecular.csv")
+  
+  rfFit$optVariables
+  plot(varImp(rfFit$fit))
+  
+  means <- colMeans(train_set[, names(train_set)%in% fnamesUse])
+  sds <- colsd_(train_set[,names(train_set) %in% fnamesUse])
+  val_feat <- (val_set - means)/sds
+  
+  
+  RFVal <- predict(object = rfFit$fit, val_set[, names(val_set) %in% bestglmFeats])
+  CM2 <- confusionMatrix(RFVal, val_set$pCR.USA)
+  resprob = predict(rfFit$fit, val_set[, names(val_set) %in% bestglmFeats], type="prob")
+  rocRFValRad <- roc(val_set$pCR.USA, resprob[,2], ci = TRUE, smooth = FALSE)
+  print(rocRFValRad)
+  roc.test(rocRFERFRad, rocRFValRad)
+  
+  epi.tests(CM1$table)
+  
+  epi.tests(CM2$table)
+  
+  rC <- data.frame(c(rocRFERFRad$sensitivities, rocRFValRad$sensitivities), c(1.0-rocRFERFRad$specificities, 1.0-rocRFValRad$specificities), c(rep("Cross validation (R)", length(rocRFERFRad$sensitivities)), rep("Test (R)", length(rocRFValRad$sensitivities))))
+  colnames(rC) <- c("Sensitivity", "Specificity", "Cohort")
+  
+    require(wesanderson)
+  
+   RadG1.NoMean <- ggplot(rC, aes(Specificity, Sensitivity, color=Cohort, linetype = Cohort)) + geom_path(size=2.0) + scale_linetype_manual(values = c("solid", "solid")) + scale_color_manual(values = wes_palette("Darjeeling")) + theme_pubr(base_size=24) + xlab("1-Specificity") + ylab("Sensitivity\n") + theme(plot.title = element_text(hjust = 0.0), axis.text=element_text(size=24), axis.title = element_text(size=28),  axis.title.x = element_text(size=20), axis.title.y = element_text(size=20)) + theme(axis.text=element_text(size=24, face="bold"), legend.text=element_text(size=24), legend.title = element_blank(), legend.position = c(0.75, 0.35)) + theme(legend.key.height = unit(2, "line")) +guides(linetype = guide_legend(nrow = 2)) +  theme(legend.background = element_rect(fill="white", size=0.25, linetype = "solid", color="black"))
+
+library(gridExtra)
+ mytheme <- gridExtra::ttheme_default(
+  core = list(fg_params=list(cex = 1.5)),
+  colhead = list(fg_params=list(cex = 1.0)),
+  rowhead = list(fg_params=list(cex = 1.0)))
+  
+
+mydata <- data.frame(TPR=c(0.53,0.54),TNR=c(0.79,0.86),PPV=c(0.82,0.86), NPV = c(0.49, 0.54))
+mytable <- cbind(Accuracy = c("Cross-Validation", "Test"), mydata)
+g2 <- g1 + annotation_custom(tableGrob(mytable, theme=mytheme), xmin=0.3, xmax=0.96, ymin=0.0, ymax=0.2)
+g2$layers[[2]]$aes_params$textsize = 6
+
+ggsave("FigureROCCurvesPCRUSA-Rad-NoMean-Jan_14_2020.tiff", RadG1.NoMean, dpi=300)
+ggsave("FigureROCCurvesPCRUSA-Rad-NoMean-Jan_14_2020.pdf", RadG1.NoMean, dpi=300)
+
+g3<- ggplot(varImp(rfFit$fit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=18), axis.title.y = element_blank())
+ggsave("FigureRFERFFeatureImportancepCRUSARad-NoMean-Jan_14_2020.tiff", g3, dpi=300)
+ggsave("FigureRFERFFeatureImportancepCRUSARad-NoMean-Jan_14_2020.pdf", g3, dpi=300)
+
+ t_set <- rbind(train_set, val_set) 
+
+  snames <- bestRFFeats
+  
+  relIndx = rep(TRUE, length(snames))
+  pVals = rep(0, length(snames))
+  for (i in 1 : length(snames)) {
+    
+    p <- wilcox.test(t_set[,names(t_set)%in% snames[i]] ~ pCR.USA, data=t_set)
+    if(p$p.value > 0.05) {
+      relIndx[i] <- FALSE
+      pVals[i] <- p$p.value
+    }
+    else{
+      pVals[i] <- p$p.value
+    }
+  }
+ # p.adjust(pVals[relIndx], method="holm")
+  padjVal <- p.adjust(pVals, method="BH")
+ 
+  legend_title = "Response"
+ 
+  
+  
+  
+```
+
+
+Nomogram
+
+```{r, echo=FALSE, warning=FALSE}
+
+  require(rms)
+val_set$Subtype <- val_set$MolecularSubtype.5way
+train_set$Subtype <- train_set$MolecularSubtype.5way
+   ddist <- datadist(val_set)
+   options(datadist='ddist') 
+  mod.bi <- lrm(pCR.USA ~ af.Pre.mean * Subtype, data = val_set)
+  nom.bi <- nomogram(mod.bi, lp.at=seq(-3,4,by=0.5), fun = function(x)1/(1+exp(-x)), fun.at=c(0.001, 0.01, 0.05, seq(.1, 0.9, by=.2), 0.95,0.99, 0.999), funlabel = "pCR", conf.int = c(0.1,0.7), abbrev=TRUE, minlength = 1, lp=F)
+  
+  plot(nom.bi,lplabel="Linear Predictor",          fun.side=c(3,3,1,1,3,1,3,1,1,1,1,1,3), col.conf=c('red','blue'), conf.space=c(0.1,0.5), label.every=3, col.grid = gray(c(0.8, 0.95)), cex.var = 1.5, vex.axis=1.5,           which="af.Pre.mean") 
+
+```
+
+
+Use RF classifier to distinguish pCR USA vs. no pCR USA with Molecular Subtype
+
+```{r, echo=FALSE, warning=FALSE}
+  require(mRMRe)
+  require(caret)
+  
+  ## have to recopy the train_set and test_set from the original CSV files
+  set.seed(1000)
+  
+  fnamesAll <- c(fnamesPre, fnamesAf, fnamesDiff)
+  Response <- as.factor(train_set$pCR.USA)
+  
+  
+  fnamesAll <- c(fnamesAll, "MolecularSubtype.5way")
+  featuredata <- train_set[, names(train_set) %in% c(fnamesAll,  "pCR.USA")]
+  
+  featuredata$MolecularSubtype.5way <- as.ordered(featuredata$MolecularSubtype.5way)
+  
+  featuredata$pCR.USA <- as.ordered(featuredata$pCR.USA)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesAll)*0.8))
+  
+  train_set$pCR.USA <- replace(train_set$pCR.USA, train_set$pCR.USA == 0, "nCR")
+  train_set$pCR.USA <- replace(train_set$pCR.USA, train_set$pCR.USA == 1, "pCR")
+  train_set$pCR.USA <- as.factor(train_set$pCR.USA)
+  
+  val_set$pCR.USA <- replace(val_set$pCR.USA, val_set$pCR.USA == 0, "nCR")
+  val_set$pCR.USA <- replace(val_set$pCR.USA, val_set$pCR.USA == 1, "pCR")
+  val_set$pCR.USA <- as.factor(val_set$pCR.USA)
+  
+  
+  findx <- unlist(solutions(filter), use.names=FALSE)
+  findx <- findx-1
+  
+  
+  clin.data <- train_set
+  ## pre-select predictors
+  print("GLMNET")
+  objControl <- trainControl(method="cv", number = 3, search = "grid", classProb = TRUE, savePredictions = "final", summaryFunction = twoClassSummary, sampling = "up")
+  eGrid <- expand.grid(.alpha = (1:10)*0.1, .lambda = seq(0.005, 0.1, by=0.005)) #seq(0.01,0.5, by=0.02)) 
+  
+    bestModelGLM <- train(train_set, clin.data$pCR.USA, method = 'glmnet', trControl = objControl, tuneGrid = eGrid, preProcess = c("scale", "center", "knnImpute"))
+  plot(bestModelGLM)
+  print(bestModelGLM$results[bestModelGLM$results$alpha==bestModelGLM$bestTune$alpha & bestModelGLM$results$lambda==bestModelGLM$bestTune$lambda,])
+  
+  impFeats <- varImp(bestModelGLM)
+  indxF <- impFeats[[1]]$Overall > 1
+  glmFnames <- rownames(impFeats[[1]])
+  bestglmFeats <- glmFnames[indxF]
+
+  
+  ### one hot encode
+  train_set$MolecularSubtype.5way <- as.factor(train_set$MolecularSubtype.5way)
+  dmy <- dummyVars(" ~ .", data = train_set[,c(bestglmFeats, "MolecularSubtype.5way")])
+  
+onehotData <- data.frame(predict(dmy, newdata = train_set[, names(train_set) %in% c("MolecularSubtype.5way", bestglmFeats)]))
+  
+  ## Recursive feature elimination RF 
+   rfCtrl <- trainControl(method = "cv", number = 5, classProbs=TRUE, savePredictions = "final", search="grid", summaryFunction=twoClassSummary, sampling = smotest)
+ 
+   rfeCtrl <- rfeControl(functions = caretFuncs, method = "cv", number = 5, returnResamp = "final", verbose = TRUE)
+ 
+   
+  #rfFit <- rfe(train_set[, names(train_set) %in% bestglmFeats], clin.data$pCR.USA, sizes = c(5, 10, 12, 15, 17, 20), rfeControl = rfeCtrl, method = "rf", metric = "ROC", trControl = rfCtrl, ntree = 1000, preProcess = c("scale", "center"))
+  
+  rfFit <- rfe(onehotData, clin.data$pCR.USA, sizes = c(5, 10, 12, 15, 17, 20), rfeControl = rfeCtrl, method = "rf", metric = "ROC", trControl = rfCtrl, ntree = 1000, preProcess = c("scale", "center"))
+  
+  impRFFeats <- varImp(rfFit$fit)
+  indxF <- impRFFeats[[1]]$Overall > 0.0
+  RFFnames <- rownames(impRFFeats[[1]])
+  bestRFFeats <- RFFnames[indxF]
+  
+  plot(rfFit$fit)
+  rocRFERF <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$pCR, ci = TRUE, smooth = FALSE)
+  CM3<- confusionMatrix(rfFit$fit$pred$pred, rfFit$fit$pred$obs)
+  print(rocRFERF)
+  rfFit$optVariables
+  plot(varImp(rfFit$fit))
+  
+  epi.tests(CM3$table)
+  
+  
+  RFVal <- predict(object = rfFit$fit, val_set[, names(val_set) %in% bestglmFeats])
+  CM4<- confusionMatrix(RFVal, val_set$pCR.USA)
+  resprob = predict(rfFit$fit, val_set[, names(val_set) %in% bestglmFeats], type="prob")
+  rocRFVal <- roc(val_set$pCR.USA, resprob[,2], ci = TRUE, smooth = FALSE)
+  
+  epi.tests(CM4$table)
+  print(rocRFVal)
+  
+  roc.test(rocRFERF, rocRFVal)
+  roc.test(rocRFERFRad, rocRFERF)
+  roc.test(rocRFValRad, rocRFVal)
+  
+  roc.test(rocRFERFRad, rocRFVal)
+  roc.test(rocRFValRad, rocRFERF)
+  
+  rC <- data.frame(c(rocRFERF$sensitivities, rocRFVal$sensitivities), c(1.0-rocRFERF$specificities, 1.0-rocRFVal$specificities), c(rep("Cross validation (R+MS)", length(rocRFERF$sensitivities)),rep("Test (R+MS)", length(rocRFVal$sensitivities))))
+  colnames(rC) <- c("Sensitivity", "Specificity", "Method")
+  
+    require(wesanderson)
+  
+   g1 <- ggplot(rC, aes(Specificity, Sensitivity, color=Method, linetype = Method)) + geom_path(size=1.5) + scale_linetype_manual(values = c("solid", "solid")) + scale_color_manual(values = wes_palette("Darjeeling")) + theme_pubr(base_size=24) + xlab("1-Specificity") + ylab("Sensitivity\n") + theme(plot.title = element_text(hjust = 0.0), axis.text=element_text(size=18), axis.title = element_text(size=24),  axis.title.x = element_text(size=20), axis.title.y = element_text(size=20)) + theme(axis.text=element_text(size=24, face="bold"), legend.text=element_text(size=24), legend.title = element_blank(), legend.position = c(0.65, 0.4)) + theme(legend.key.height = unit(2, "line")) + guides(linetype = guide_legend(nrow = 2)) + theme(legend.background = element_rect(fill="white", size=0.25, linetype = "solid", color="black"))
+
+  rocG <- ggarrange(RadG1, g1, nrow=2)
+  annotate_figure(rocG, top )
+  ggsave("RocCurves_Jan_14_2020.tiff", rocG, dpi=300)
+  ggsave("RocCurves_Jan_14_2020.pdf", rocG, dpi=300)
+  
+  require(cowplot)
+   draw_plot(RadG1, x=0, y=0, width=1, height=0.3) + 
+    draw_plot(g1, x=0, y=0.5, width=1, height=0.6) + 
+    draw_plot_label(label = c("A", "B"), size=16, x = c(0, 0), y = c(0.5, 1))
+   
+library(gridExtra)
+ mytheme <- gridExtra::ttheme_default(
+  core = list(fg_params=list(cex = 1.5)),
+  colhead = list(fg_params=list(cex = 1.0)),
+  rowhead = list(fg_params=list(cex = 1.0)))
+  
+
+mydata <- data.frame(TPR=c(0.54,0.69),TNR=c(0.86,0.86),PPV=c(0.83,0.90), NPV = c(0.60,0.60))
+mytable <- cbind(Accuracy = c("CV(R+S)", "Test(R+S)"), mydata)
+g2 <- g1 + annotation_custom(tableGrob(mytable, theme=mytheme), xmin=0.2, xmax=0.95, ymin=0.0, ymax=0.2)
+g2$layers[[2]]$aes_params$textsize = 6
+
+ggsave("FigureROCCurvesPCRUSAMolecular-Oct232018.tiff", g2, dpi=300)
+ggsave("FigureROCCurvesPCRUSAMolecular-OCt232018.pdf", g2, dpi=300)
+
+g3<- ggplot(varImp(rfFitMS$fit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=18), axis.title.y = element_blank())
+
+RadG3 <- ggplot(varImp(rfFit$fit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=18), axis.title.y = element_blank())
+
+ ggsave("FigurePCRUSA_RadiomicsMolecular-Jan_14_2020.tiff", RadG3, dpi=300)
+ ggsave("FigurePCRUSA_RadiomicsMolecular-Jan_14_2020.pdf", RadG3, dpi=300)
+
+impG <- ggarrange(RadG3, g3, nrow = 2)
+ggsave("FeaturesImportance-July2019.pdf", impG, dpi=300)
+#g3<- ggplot(varImp(rfFit$fit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=14))
+ggsave("FigureRFERFFeatureImportancepCRUSAMolecular-July232019.tiff", g3, dpi=300)
+ggsave("FigureRFERFFeatureImportancepCRUSAMolecular-July232019.pdf", g3, dpi=300)
+
+ t_set <- rbind(train_set, val_set) 
+
+  snames <- bestRFFeats[!bestRFFeats %in% c("MolecularSubtype.5way.1", "MolecularSubtype.5way.2")]
+  
+  relIndx = rep(TRUE, length(snames))
+  pVals = rep(0, length(snames))
+  for (i in 1 : length(snames)) {
+    
+    p <- wilcox.test(t_set[,names(t_set)%in% snames[i]] ~ pCR.USA, data=t_set)
+    if(p$p.value > 0.05) {
+      relIndx[i] <- FALSE
+      pVals[i] <- p$p.value
+    }
+    else{
+      pVals[i] <- p$p.value
+    }
+  }
+ # p.adjust(pVals[relIndx], method="holm")
+  padjVal <- p.adjust(pVals, method="BH")
+ 
+  legend_title = "Response"
+  
+  
+   g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$diff.Pre.mean, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 9, label = "P < 0.001", size=11) + ylim(-2.0, 10) + ylab("Difference pre-contrast mean")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("FigurePCRUSA_RadiomicsMol-DiffPreMean.tiff", g2, dpi=300)
+
+  
+  g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$diff.Pre.Homogeneity, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 90, label = "P = 0.004", size=11) + ylim(-60.0, 100.0) + ylab("Difference pre-contrast homogeneity")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("~/pubs/pubs/2020/12_17_2019_BreastCancerResearch/FIGURES/FigurePCRUSA_RadiomicsMol-DiffPreHomogeneity.tiff", g2, dpi=300)
+  
+  
+   g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$diff.Post2.Skewness, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 90, label = "P = 0.0025", size=11) + ylim(0.0, 40.0) + ylab("Difference post2 skewness")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("FigurePCRUSA_RadiomicsMol-DiffPost2Skewness.tiff", g2, dpi=300)
+ 
+  
+   g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$diff.Post1.Gab0.Energy, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 90, label = "P = 0.0025", size=11) + ylim(-2.0, 2.0) + ylab("Difference post1 Gabor (0, 1.414) energy")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("FigurePCRUSA_RadiomicsMol-DiffPost1Gab0Energy.tiff", g2, dpi=300)
+ 
+  
+   g2 <- ggplot(data=t_set, aes(x=factor(t_set$pCR.USA), y=t_set$diff.Post1.mean, fill=pCR.USA)) + geom_boxplot() + theme_pubr(base_size=24) + scale_fill_manual(legend_title, labels = c("nCR", "pCR"), values = wes_palette("GrandBudapest")) + theme(axis.text=element_text(size=20), axis.title.x = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) +  geom_hline(yintercept = 0, linetype="dashed", color="black", size=1) + annotate("text", x = 1.5, y = 55, label = "P = 0.003", size=11) + ylim(-60.0, 60.0) + ylab("Difference post1 mean")
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("FigurePCRUSA_RadiomicsMol-DiffPost1mean.tiff", g2, dpi=300)
+ 
+
+    
+  combG2 <- ggarrange(RadG2, g2, ncol=2)
+  ggsave("FigurePCRUSA_RadiomicsMolecular-AfPreMean.tiff", g2, dpi=300)
+  ggsave("FigurePCRUSA_RadiomicsMolecular-AfPreMean.pdf", g2, dpi=300)
+  quantile(t_set$af.Pre.mean[t_set$pCR.USA=="nCR"])
+  quantile(t_set$af.Pre.mean[t_set$pCR.USA=="pCR"])
+ 
+ 
+  save(rfFit, file = "PrePostMolecularSubtypeModel.rda")
+
+```
+
+
+```{r, echo=F, warning=F}
+#  t_set <- rbind(train_set, val_set)
+  t_set <- val_set 
+
+  snames <- bestRFFeats
+  
+  relIndx = rep(TRUE, length(snames))
+  pVals = rep(0, length(snames))
+  for (i in 1 : length(snames)) {
+    
+    p <- wilcox.test(t_set[,names(t_set)%in% snames[i]] ~ pCR.USA, data=t_set)
+    if(p$p.value > 0.05) {
+      relIndx[i] <- FALSE
+      pVals[i] <- p$p.value
+    }
+    else{
+      pVals[i] <- p$p.value
+    }
+  }
+ # p.adjust(pVals[relIndx], method="holm")
+  padjVal <- p.adjust(pVals, method="holm")
+  legend_title = "Response"
+  pIndx <- padjVal < 0.05
+  
+  fnames = c(snames[pIndx], "pCR.USA")
+  dataPD <- t_set[, names(t_set)%in% fnames]
+  dataPD <- subset(dataPD, select = c(2, 1, 3, 4, 5))
+  cnames <- colnames(dataPD)
+  cnames[1] <- "pCR"
+  colnames(dataPD) <- cnames
+  dataPD$MolecularSubtype.5way = dataPD$MolecularSubtype.5way*10
+  dataPD$af.Pre.mean = dataPD$af.Pre.mean*10
+  require(reshape2)
+  
+  df <- melt(dataPD, id.vars = "pCR", measure.vars = c("af.Pre.mean", "af.Pre.Homogeneity", "diff.Pre.Contrast", "MolecularSubtype.5way"))
+  
+  
+  my_comparisons <- list(c("nCR.af.Pre.mean", "pCR.af.Pre.mean"), c("nCR.af.Pre.Homogeneity", "pCR.af.Pre.Homogeneity"), c("nCR.diff.Pre.Contrast", "pCR.diff.Pre.Contrast"), c("nCR.MolecularSubtype.5way", "pCR.MolecularSubtype.5way"))
+  
+  df$PCRVar <- interaction(df$pCR, df$variable)
+  g2 <- ggplot(data=df, aes(x=factor(PCRVar), y=value, fill=pCR)) + geom_boxplot() + theme_pubr(base_size=24) + scale_x_discrete(labels = c("nCR.af.Pre.mean" = "post-NAC \n pre-contrast \n Mean", "pCR.af.Pre.mean" = "", "nCR.af.Pre.Homogeneity" = "post-NAC \n pre-contrast \n Homogeneity", "pCR.af.Pre.Homogeneity"= "", "nCR.diff.Pre.Contrast" = "Difference \n pre-contrast \n Contrast", "pCR.diff.Pre.Contrast" = "", "nCR.MolecularSubtype.5way" = "Molecular \n Subtype", "pCR.MolecularSubtype.5way" = "")) + ylim(-136, 155) +  scale_fill_manual(legend_title, labels = c("pCR", "no pCR"), values = wes_palette("GrandBudapest")) +  stat_compare_means(aes(label = paste0("p =", ..p.format..)), tip_length = 0.005, size=1.0, comparisons = my_comparisons, method = "wilcox", label.y = 148) +   theme(axis.text=element_text(size=20), axis.title = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) + ggtitle("Radiomics & Clinical Measures vs. pCR") + geom_hline(yintercept = 0, linetype="dashed", color="black", size=1)
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+
+  #res <- ggarrange(g1, g2, nrow=2, ncol=1, common.legend = TRUE,legend = "top", align = "hv")
+  ggsave("RadiomicsMolecularpCRUSANew.pdf", g2, dpi=300)
+  
+ 
+```
+
+
+
+
+### Additional analysis not used in the paper
+
+Use RF to distinguish ER+ vs ER- cancers
+
+
+```{r, echo=FALSE, warning=FALSE}
+  require(mRMRe)
+  require(caret)
+  require(ggpubr)
+  require(gridExtra)
+  
+  set.seed(1000)
+  
+  means <- colMeans(train_set[, names(train_set)%in% fnamesAll])
+  sds <- colsd_(train_set[,names(train_set) %in% fnamesAll])
+ 
+  Response <- as.factor(train_set$Erstatus)
+  
+  val_feat <- (val_set - means)/sds
+  
+  featuredata <- train_set[, names(train_set) %in% c(fnamesAll, "Erstatus")]
+  
+  featuredata$Erstatus <- as.ordered(featuredata$Erstatus)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesAll)*0.6))
+  
+  train_set$Erstatus <- replace(train_set$Erstatus, train_set$Erstatus == 0, "ERneg")
+  train_set$Erstatus <- replace(train_set$Erstatus, train_set$Erstatus == 1, "ERpos")
+  train_set$Erstatus <- as.factor(train_set$Erstatus)
+  
+  val_set$Erstatus <- replace(val_set$Erstatus, val_set$Erstatus == 0, "ERneg")
+  val_set$Erstatus <- replace(val_set$Erstatus, val_set$Erstatus == 1, "ERpos")
+  val_set$Erstatus <- as.factor(val_set$Erstatus)
+  
+  
+  findx <- unlist(solutions(filter), use.names=FALSE)
+  findx <- findx-1
+  
+  clin.data <- train_set
+  
+  train_set <- clin.data[, names(clin.data) %in% fnamesAll[findx]]
+  for (i in 1 : length(findx)) {
+     train_set[,i] <- clin.data[, names(clin.data)%in% fnamesAll[findx[i]]]
+  }
+  colnames(train_set) <- fnamesAll[findx]
+  
+  ## pre-select predictors
+  print("GLMNET")
+  objControl <- trainControl(method="cv", number = 3, search = "grid", classProb = TRUE, savePredictions = "final", summaryFunction = twoClassSummary)
+  eGrid <- expand.grid(.alpha = (1:10)*0.1, .lambda = seq(0.005, 0.1, by=0.005)) #seq(0.01,0.5, by=0.02)) 
+    bestModelGLM <- train(train_set, clin.data$Erstatus, method = 'glmnet', trControl = objControl, tuneGrid = eGrid, preProcess = c("scale", "center"))
+  plot(bestModelGLM)
+  print(bestModelGLM$results[bestModelGLM$results$alpha==bestModelGLM$bestTune$alpha & bestModelGLM$results$lambda==bestModelGLM$bestTune$lambda,])
+  
+  impFeats <- varImp(bestModelGLM)
+  indxF <- impFeats[[1]]$Overall > 0.1
+  glmFnames <- rownames(impFeats[[1]])
+  bestglmFeats <- glmFnames[indxF]
+
+ 
+  
+  ## Recursive feature elimination RF 
+   rfCtrl <- trainControl(method = "cv", number = 5, classProbs=TRUE, savePredictions = "final", search="grid", summaryFunction=twoClassSummary)
+ 
+   rfeCtrl <- rfeControl(functions = caretFuncs, method = "cv", number = 5, returnResamp = "final", verbose = TRUE)
+   rfFit <- rfe(train_set[, names(train_set)%in% bestglmFeats], clin.data$Erstatus, sizes = c(5, 10, 15, 20, 25, 30), rfeControl = rfeCtrl, method = "rf", 
+                metric = "ROC", trControl = rfCtrl, ntree = 1000, preProcess = c("scale", "center"))
+  
+  impRFFeats <- varImp(rfFit$fit)
+  indxF <- impRFFeats[[1]]$Overall > 0.1
+  RFFnames <- rownames(impRFFeats[[1]])
+  bestRFFeats <- RFFnames[indxF]
+  
+  plot(rfFit$fit)
+  rocRFERF <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$ERneg, ci = TRUE, smooth = FALSE)
+  confusionMatrix(rfFit$fit$pred$pred, rfFit$fit$pred$obs)
+  print(rocRFERF)
+  
+  rfFit$optVariables
+  plot(varImp(rfFit$fit))
+  
+  RFVal <- predict(object = rfFit$fit, val_set[, names(val_set) %in% bestglmFeats])
+  confusionMatrix(RFVal, val_set$Erstatus)
+  resprob = predict(rfFit$fit, val_set[, names(val_set) %in% bestglmFeats], type="prob")
+  rocRFVal <- roc(val_set$Erstatus, resprob[,2], ci = TRUE, smooth = FALSE)
+  print(rocRFVal)
+  roc.test(rocRFERF, rocRFVal)
+  
+  rC <- data.frame(c(rocRFERF$sensitivities, rocRFVal$sensitivities), c(1.0-rocRFERF$specificities, 1.0-rocRFVal$specificities), c(rep("Cross validation", length(rocRFERF$sensitivities)), rep("True validation", length(rocRFVal$sensitivities))))
+  colnames(rC) <- c("Sensitivity", "Specificity", "Test")
+  
+    require(wesanderson)
+  
+   g1 <- ggplot(rC, aes(Specificity, Sensitivity, color=Test, linetype = Test)) + geom_path(size=1.5) + scale_linetype_manual(values = c("dotted", "solid")) + scale_color_manual(values = wes_palette("Darjeeling")) + theme_pubr(base_size=24) + xlab("1-Specificity") + ylab("Sensitivity\n") + theme(plot.title = element_text(hjust = 0.0), axis.text=element_text(size=18), axis.title = element_text(size=24),  axis.title.x = element_text(size=20), axis.title.y = element_text(size=20)) + labs(title = "Reciever operating curve for ER- vs. ER+") + theme(axis.text=element_text(size=24, face="bold"), legend.text=element_text(size=24), legend.title = element_text(size=26), legend.position = c(0.75, 0.35)) + guides(linetype = guide_legend(nrow = 2)) + theme(legend.background = element_rect(fill="white", size=0.25, linetype = "solid", color="black"))
+
+library(gridExtra)
+ mytheme <- gridExtra::ttheme_default(
+  core = list(fg_params=list(cex = 2.2)),
+  colhead = list(fg_params=list(cex = 1.0)),
+  rowhead = list(fg_params=list(cex = 1.0)))
+
+mydata <- data.frame(TPR=c(0.47,0.50),TNR=c(0.70,0.73),PPV=c(0.55,0.62), NPV = c(0.63, 0.63))
+mytable <- cbind(Accuracy = c("Cross-Validation", "Test"), mydata)
+g2 <- g1 + annotation_custom(tableGrob(mytable, theme=mytheme), xmin=0.2, xmax=0.96, ymin=0.0, ymax=0.2)
+
+ggsave("FigureROCCurvesERNew.tiff", g2, dpi=300)
+ggsave("FigureROCCurvesERNew.pdf", g2, dpi=300)
+
+g3<- ggplot(varImp(rfFit$fit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=14))
+ggsave("FigureRFERFFeatureImportancepERNew.tiff", g3, dpi=300)
+ggsave("FigureRFERFFeatureImportancepERNew.pdf", g3, dpi=300)
+
+```
+
+# ER + vs ER- features
+
+```{r, echo=F, warning=F}
+  origt_set = t_set
+  t_set <- rbind(train_set, val_set)
+  t_set$Erstatus = replace(t_set$Erstatus, t_set$Erstatus==0, "ERneg")
+  t_set$Erstatus = replace(t_set$Erstatus, t_set$Erstatus==1, "ERpos")
+  
+  t_set$Erstatus <- as.factor(t_set$Erstatus)
+  
+  
+#   require(Hmisc)
+#   require(RColorBrewer)
+#   my_data1 <- as.matrix(t_set[, names(t_set) %in% bestRFFeats])
+#   rownames(my_data1) <- t_set$Erstatus
+#   indx <- sort(rownames(my_data1), index.return = TRUE)
+#   col<- colorRampPalette(c("blue", "yellow", "red"))(100)
+#   
+#   my_group=as.numeric(as.factor(rownames(my_data1)))
+#   my_col=brewer.pal(3, "Set1")[my_group[indx$ix]]
+# heatmap.2(t(data1[indx$ix, colnames(data1) %in% gnames]), trace='none', col=rev(cols), Rowv='NA', Colv='NA', dendrogram = "none", ColSideColors = my_col, Scale="row")
+#   
+#   heatmap.2(x = t(scale(my_data1[indx$ix, ])), col = rev(col), Rowv='NA', symm = FALSE, trace='none', dendrogram="column", cexRow=1.5, cexCol=0.3,margins=c(5,10),srtCol=90, lwid=c(1,5), lhei=c(2,8), breaks = seq(-0.5, 0.5, 0.01), ColSideColors = my_col)
+  
+  snames <- bestRFFeats
+  
+  relIndx = rep(TRUE, length(snames))
+  pVals = rep(0, length(snames))
+  for (i in 1 : length(snames)) {
+    
+    p <- wilcox.test(t_set[,names(t_set)%in% snames[i]] ~ Erstatus, data=t_set)
+    if(p$p.value > 0.05) {
+      relIndx[i] <- FALSE
+      pVals[i] <- p$p.value
+    }
+    else{
+      pVals[i] <- p$p.value
+    }
+  }
+ # p.adjust(pVals[relIndx], method="holm")
+  padjVal <- p.adjust(pVals, method="holm")
+  legend_title = "ER status"
+  pIndx <- padjVal < 0.05
+  
+  
+  g3 <- ggplot(t_set, aes(x=Erstatus, y=scale(bef.Post3.Entropy), fill=Erstatus)) + geom_boxplot() + theme_classic(base_size = 24) + geom_jitter(width=0.1, height=0.01) + theme(text = element_text(size=24)) + ylim(-4, 7) + stat_compare_means(size=8) +stat_compare_means(aes(label = paste0("p =", ..p.format..)), tip_length = 0.005, size=1.0, comparisons = my_comparisons, method = "wilcox") + scale_fill_manual(legend_title, labels = c("ER+", "ER-"), values = wes_palette("Darjeeling")) + theme(axis.text=element_text(size=26, face="bold"), axis.title = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position = "top", legend.title = element_text(size=24), legend.text = element_text(size=24)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) + ggtitle("Radiomics Texture measures vs. ER status") + geom_hline(yintercept = 0, linetype="dashed", color="black", size=1)
+  g3$layers[[2]]$geom_params$na.rm=TRUE
+  g3$layers[[2]]$stat_params$tip_length = 0.001
+  g3$layers[[2]]$aes_params$textsize = 12
+  g3 <- ggpar(g3, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("BoxplotPost3EntropyER.pdf", g3, dpi=300)
+  
+  
+  fnames = c(snames[pIndx], "Erstatus")
+  dataPD <- t_set[, names(t_set)%in% fnames]
+  cnames <- colnames(dataPD)
+  cnames[1] <- "ER"
+  colnames(dataPD) <- cnames
+  require(reshape2)
+  
+  df <- melt(dataPD, id.vars = "ER", measure.vars = c("bef.Post3.Entropy", "diff.Post3.Energy", "diff.Pre.Homogeneity"))
+  
+  my_comparisons <- list(c("ERneg.bef.Post3.Entropy", "ERpos.bef.Post3.Entropy"), c("ERneg.diff.Post3.Energy", "ERpos.diff.Post3.Energy"), c("ERneg.diff.Pre.Homogeneity", "ERpos.diff.Pre.Homogeneity"))
+  
+  df$ERVar <- interaction(df$ER, df$variable)
+  g2 <- ggplot(data=df, aes(x=factor(ERVar), y=value, fill=ER)) + geom_boxplot() + theme_pubr(base_size=20) + scale_x_discrete(labels =  c("ERpos.bef.Post3.Entropy"="", "ERneg.bef.Post3.Entropy" = "pre-NAC \n post-contrast(3) \n Entropy", "ERpos.diff.Post3.Energy" = "", "ERneg.diff.Post3.Energy"="Difference \n post-contrast(3) \n Energy", "ERpos.diff.Pre.Homogeneity"="",  "ERneg.diff.Pre.Homogeneity" = "Difference \n pre-contrast \n Homogeneity")) + ylim(-62, 105) +  scale_fill_manual(legend_title, labels = c("ER positive", "ER negative"), values = wes_palette("GrandBudapest")) +  stat_compare_means(aes(label = paste0("p =", ..p.format..)), tip_length = 0.005, size=1.0, comparisons = my_comparisons, method = "wilcox", label.y = 100) + theme(axis.text=element_text(size=26, face="bold"), axis.title = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=24)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) + ggtitle("Radiomics Texture measures vs. ER+ subtype") + geom_hline(yintercept = 0, linetype="dashed", color="black", size=1)
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.001
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(26, "bold"))  
+
+  ggsave("RadiomicspERNew.pdf", g2, dpi=300)
+  
+
+```
+
+
+
+Use features extracted relevant for ER+ vs. ER- to distinguish histology
+
+```{r, echo=FALSE, warning=T}
+  
+  indxH <- t_set$histology==1 | t_set$histology==4
+  dataH <- t_set[indxH,]
+  histology <- dataH$histology
+  histology <- replace(histology, histology==1, "IDC")
+  histology <- replace(histology, histology==2 | histology == 4, "notIDC")
+ 
+  relIndx = rep(TRUE, length(snames))
+  pVals = rep(0, length(snames))
+  for (i in 1 : length(snames)) {
+    
+    p <- wilcox.test(dataH[,names(dataH)%in% snames[i]] ~ histology, data=dataH)
+    if(p$p.value > 0.05) {
+      relIndx[i] <- FALSE
+    }
+    
+    pVals[i] <- p$p.value
+    
+  }
+  p.adjust(pVals, method="BH")
+  dataH$histology <- histology
+  
+  g3 <- ggplot(dataH, aes(x=histology, y=bef.Post3.Entropy, fill=histology)) + geom_boxplot() + theme_classic(base_size = 14) + geom_jitter(width=0.1, height=0.01) + theme(text = element_text(size=14)) + stat_compare_means(size=5) 
+  
+  g4 <- ggplot(dataH, aes(x=histology, y=bef.Post3.Gab0.Correlation, fill=histology)) + geom_boxplot() + theme_classic(base_size = 14) + geom_jitter(width=0.1, height=0.01) + theme(text = element_text(size=14)) + stat_compare_means(size=5) 
+  
+  res <- ggarrange(g3, g4, ncol=1, nrow=2, common.legend = TRUE, legend="top", align = "hv")
+  ggsave("FigureIDCEntropy.pdf", g3, dpi = 300)
+  ggsave("FigureIDCEntropy.png", g3, dpi = 300)
+  
+   g4 <- ggplot(dataH, aes(x=histology, y=bef.cSE, fill=histology)) + geom_boxplot() + theme_classic(base_size = 14) + geom_jitter(width=0.1, height=0.01) + theme(text = element_text(size=14)) + stat_compare_means(size=5) 
+   
+   g4 <- ggplot(dataH, aes(x=histology, y=af.cSE, fill=histology)) + geom_boxplot() + theme_classic(base_size = 14) + geom_jitter(width=0.1, height=0.01) + theme(text = element_text(size=14)) + stat_compare_means(size=5) 
+   
+   g4 <- ggplot(dataH, aes(x=histology, y=diff.cSE, fill=histology)) + geom_boxplot() + theme_classic(base_size = 14) + geom_jitter(width=0.1, height=0.01) + theme(text = element_text(size=14)) + stat_compare_means(size=5) 
+   
+  
+```
+
+
+
+Use RF to distinguish Luminal HER2+/- vs. HER2+ vs TN cancers
+
+
+```{r, echo=FALSE, warning=FALSE}
+  require(mRMRe)
+  require(caret)
+  require(ggpubr)
+  require(gridExtra)
+  
+  train_set <- t_set[train,]
+  val_set <- t_set[validation,]
+
+  set.seed(1000)
+  
+  
+  featuredata <- train_set[, names(train_set) %in% c(fnamesAll, "MolecularSubtype.5way")]
+  
+  featuredata$MolecularSubtype.5way <- as.ordered(featuredata$MolecularSubtype.5way)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesAll)*0.6))
+  
+ # train_set$MolecularSubtype.3way <- replace(train_set$MolecularSubtype.3way, train_set$MolecularSubtype.3way == 1, "Luminal")
+ # train_set$MolecularSubtype.3way <- replace(train_set$MolecularSubtype.3way, train_set$MolecularSubtype.3way == 2, "HER2")
+#  train_set$MolecularSubtype.3way <- replace(train_set$MolecularSubtype.3way, train_set$MolecularSubtype.3way == 3, "TN")
+#  train_set$MolecularSubtype.3way <- as.factor(train_set$MolecularSubtype.3way)
+  
+  
+ # val_set$MolecularSubtype.3way <- replace(val_set$MolecularSubtype.3way, val_set$MolecularSubtype.3way == 1, "Luminal")
+ # val_set$MolecularSubtype.3way <- replace(val_set$MolecularSubtype.3way, val_set$MolecularSubtype.3way == 2, "HER2")
+#  val_set$MolecularSubtype.3way <- replace(val_set$MolecularSubtype.3way, val_set$MolecularSubtype.3way == 3, "TN")
+ # val_set$MolecularSubtype.3way <- as.factor(val_set$MolecularSubtype.3way)
+  
+  
+   train_set$MolecularSubtype.5way <- replace(train_set$MolecularSubtype.5way, train_set$MolecularSubtype.5way == 1, "Luminal")
+  train_set$MolecularSubtype.5way <- replace(train_set$MolecularSubtype.5way, train_set$MolecularSubtype.5way == 2, "HER2")
+  train_set$MolecularSubtype.5way <- replace(train_set$MolecularSubtype.5way, train_set$MolecularSubtype.5way == 3, "TN")
+  train_set$MolecularSubtype.5way <- replace(train_set$MolecularSubtype.5way, train_set$MolecularSubtype.5way == 4, "LuminalHER2")
+  train_set$MolecularSubtype.5way <- as.factor(train_set$MolecularSubtype.5way)
+  
+  val_set$MolecularSubtype.5way <- replace(val_set$MolecularSubtype.5way, val_set$MolecularSubtype.5way == 1, "Luminal")
+  val_set$MolecularSubtype.5way <- replace(val_set$MolecularSubtype.5way, val_set$MolecularSubtype.5way == 2, "HER2")
+  val_set$MolecularSubtype.5way <- replace(val_set$MolecularSubtype.5way, val_set$MolecularSubtype.5way == 3, "TN")
+  val_set$MolecularSubtype.5way <- replace(val_set$MolecularSubtype.5way, val_set$MolecularSubtype.5way == 4, "LuminalHER2")
+  val_set$MolecularSubtype.5way <- as.factor(val_set$MolecularSubtype.5way)
+ 
+  
+  findx <- unlist(solutions(filter), use.names=FALSE)
+  findx <- findx-1
+  
+  clin.data <- train_set
+  
+  train_set <- clin.data[, names(clin.data) %in% fnamesAll[findx]]
+  for (i in 1 : length(findx)) {
+     train_set[,i] <- clin.data[, names(clin.data)%in% fnamesAll[findx[i]]]
+  }
+  colnames(train_set) <- fnamesAll[findx]
+  
+  ## pre-select predictors
+  print("GLMNET")
+  objControl <- trainControl(method="cv", number = 3, search = "grid", classProb = TRUE, savePredictions = "final", sampling = "up")
+  eGrid <- expand.grid(.alpha = (1:10)*0.1, .lambda = seq(0.005, 0.1, by=0.005)) #seq(0.01,0.5, by=0.02)) 
+    bestModelGLM <- train(train_set, clin.data$MolecularSubtype.5way, method = 'glmnet', trControl = objControl, tuneGrid = eGrid, preProcess = c("scale", "center"))
+  plot(bestModelGLM)
+  print(bestModelGLM$results[bestModelGLM$results$alpha==bestModelGLM$bestTune$alpha & bestModelGLM$results$lambda==bestModelGLM$bestTune$lambda,])
+  
+  impFeats <- varImp(bestModelGLM)
+  indxF <- impFeats[[1]]$HER2 > 0.1
+  glmFnames <- rownames(impFeats[[1]])
+  bestglmFeats <- glmFnames[indxF]
+
+  ## Recursive feature elimination RF 
+   rfCtrl <- trainControl(method = "cv", number = 4, classProbs=TRUE, savePredictions = "final", search="grid", sampling = "smote")
+ 
+   rfeCtrl <- rfeControl(functions = caretFuncs, method = "cv", number = 4, returnResamp = "final", verbose = TRUE)
+   rfFit <- rfe(train_set[, names(train_set)%in% bestglmFeats], clin.data$MolecularSubtype.5way, sizes = c(5, 10, 15, 20, 25, 30), rfeControl = rfeCtrl, method = "rf", 
+                metric = "ROC", trControl = rfCtrl, ntree = 1000, preProcess = c("scale", "center"))
+  
+  impRFFeats <- varImp(rfFit$fit)
+  indxF <- impRFFeats[[1]]$Overall > 50
+  RFFnames <- rownames(impRFFeats[[1]])
+  bestRFFeats <- RFFnames[indxF]
+  
+  plot(rfFit$fit)
+  rocRFERFHER2 <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$HER2, ci = TRUE, smooth = FALSE)
+  
+  rocRFERFLuminalHER2 <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$LuminalHER2, ci = TRUE, smooth = FALSE)
+  
+  rocRFERFLuminal <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$Luminal, ci = TRUE, smooth = FALSE)
+  
+  rocRFERFTN <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$TN, ci = TRUE, smooth = FALSE)
+  confusionMatrix(rfFit$fit$pred$pred, rfFit$fit$pred$obs)
+  print(rocRFERF)
+  
+  rfFit$optVariables
+  plot(varImp(rfFit$fit))
+  
+  RFVal <- predict(object = rfFit$fit, val_set[, names(val_set) %in% bestglmFeats])
+  confusionMatrix(RFVal, val_set$MolecularSubtype.5way)
+  resprob = predict(rfFit$fit, val_set[, names(val_set) %in% bestglmFeats], type="prob")
+  rocRFValHER2 <- roc(val_set$MolecularSubtype.5way, resprob[,1], ci = TRUE, smooth = FALSE)
+  rocRFValLuminal <- roc(val_set$MolecularSubtype.5way, resprob[,2], ci = TRUE, smooth = FALSE)
+  rocRFValLuminalHER2 <- roc(val_set$MolecularSubtype.5way, resprob[,3], ci = TRUE, smooth = FALSE)
+  rocRFValTN <- roc(val_set$MolecularSubtype.5way, resprob[,4], ci = TRUE, smooth = FALSE)
+  print(rocRFValHER2)
+  print(rocRFValLuminal)
+  print(rocRFValLuminalHER2)
+  print(rocRFValTN)
+  
+  roc.test(rocRFERFHER2, rocRFValHER2)
+  roc.test(rocRFERFLuminalHER2, rocRFValLuminalHER2)
+  roc.test(rocRFERFLuminal, rocRFValLuminal)
+  roc.test(rocRFERFTN, rocRFValTN)
+  
+  rC <- data.frame(c(rocRFERFHER2$sensitivities, rocRFValHER2$sensitivities), c(1.0-rocRFERFHER2$specificities, 1.0-rocRFValHER2$specificities), c(rep("Cross validation", length(rocRFERFHER2$sensitivities)), rep("True validation", length(rocRFValHER2$sensitivities))))
+  colnames(rC) <- c("Sensitivity", "Specificity", "Test")
+  
+    require(wesanderson)
+  
+   g1 <- ggplot(rC, aes(Specificity, Sensitivity, color=Test, linetype = Test)) + geom_path(size=1.5) + scale_linetype_manual(values = c("dotted", "solid")) + scale_color_manual(values = wes_palette("Darjeeling")) + theme_pubr(base_size=24) + xlab("1-Specificity") + ylab("Sensitivity\n") + theme(plot.title = element_text(hjust = 0.0), axis.text=element_text(size=18), axis.title = element_text(size=24),  axis.title.x = element_text(size=20), axis.title.y = element_text(size=20)) + labs(title = "ROC: Luminal vs. HER2+ vs. TN vs. LuminalHER2") + theme(axis.text=element_text(size=24, face="bold"), legend.text=element_text(size=24), legend.title = element_text(size=26), legend.position = c(0.75, 0.35)) + guides(linetype = guide_legend(nrow = 2)) + theme(legend.background = element_rect(fill="white", size=0.25, linetype = "solid", color="black"))
+
+library(gridExtra)
+ mytheme <- gridExtra::ttheme_default(
+  core = list(fg_params=list(cex = 2.2)),
+  colhead = list(fg_params=list(cex = 1.0)),
+  rowhead = list(fg_params=list(cex = 1.0)))
+
+mydata <- data.frame(TPR=c(0.61,0.75),TNR=c(0.64,0.69),PPV=c(0.25,0.29), NPV = c(0.89, 0.94))
+mytable <- cbind(Accuracy = c("Cross-Validation", "Test"), mydata)
+g2 <- g1 + annotation_custom(tableGrob(mytable, theme=mytheme), xmin=0.2, xmax=0.96, ymin=0.0, ymax=0.2)
+
+ggsave("FigureROCCurves4WayNewHER2.tiff", g2, dpi=300)
+ggsave("FigureROCCurves4WayNewHER2.pdf", g2, dpi=300)
+
+g3<- ggplot(varImp(rfFit$fit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=14))
+ggsave("FigureRFERFFeatureImportancepMolecularNew.tiff", g3, dpi=300)
+ggsave("FigureRFERFFeatureImportancepMolecularNew.pdf", g3, dpi=300)
+
+ 
+  t_set$MolecularSubtype.5way = replace(t_set$MolecularSubtype.5way, t_set$MolecularSubtype.5way==1, "Luminal")
+  t_set$MolecularSubtype.5way = replace(t_set$MolecularSubtype.5way, t_set$MolecularSubtype.5way==2, "HER2")
+  t_set$MolecularSubtype.5way = replace(t_set$MolecularSubtype.5way, t_set$MolecularSubtype.5way==3, "TripleNegative")
+  t_set$MolecularSubtype.5way = replace(t_set$MolecularSubtype.5way, t_set$MolecularSubtype.5way==4, "LuminalHER2")
+  
+  
+  t_set$MolecularSubtype.5way <- as.factor(t_set$MolecularSubtype.5way)
+  
+  snames <- bestRFFeats
+  relIndx = rep(TRUE, length(snames))
+  pVals = rep(0, length(snames))
+  for (i in 1 : length(snames)) {
+    
+    p <- kruskal.test(t_set[,names(t_set)%in% snames[i]] ~ MolecularSubtype.3way, data=t_set)
+    if(p$p.value > 0.05) {
+      relIndx[i] <- FALSE
+      pVals[i] <- p$p.value
+    }
+    else{
+      pVals[i] <- p$p.value
+    }
+  }
+ # p.adjust(pVals[relIndx], method="holm")
+  padjVal <- p.adjust(pVals, method="holm")
+  legend_title = "Response"
+  pIndx <- padjVal < 0.05
+  
+  
+  my_comparisons <- list(c("TripleNegative", "HER2"), c("Luminal", "TripleNegative"), c("HER2", "Luminal"))
+  legend_title <- "Molecular Subtype"
+   g3 <- ggplot(t_set, aes(x=MolecularSubtype.3way, y=scale(diff.Post2.Entropy), fill=MolecularSubtype.3way)) + geom_boxplot() + theme_classic(base_size = 24) + geom_jitter(width=0.1, height=0.01) + theme(text = element_text(size=24)) + ylim(-4, 7) + stat_compare_means(size=8) +stat_compare_means(aes(label = paste0("p =", ..p.format..)), tip_length = 0.005, size=1.0, comparisons = my_comparisons, method = "wilcox") + scale_fill_manual(legend_title, labels = c("Luminal", "HER2+", "Triple negative"), values = wes_palette("Darjeeling")) + theme(axis.text=element_text(size=26, face="bold"), axis.title = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position = "top", legend.title = element_text(size=24), legend.text = element_text(size=24)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) + ggtitle("Radiomics Texture measures vs. Molecular subtype") + geom_hline(yintercept = 0, linetype="dashed", color="black", size=1)
+  g3$layers[[2]]$geom_params$na.rm=TRUE
+  g3$layers[[2]]$stat_params$tip_length = 0.001
+  g3$layers[[2]]$aes_params$textsize = 12
+  g3 <- ggpar(g3, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("BoxplotDeltaEntropyMolecularNew.pdf", g3, dpi=300)
+  
+   g3 <- ggplot(t_set, aes(x=MolecularSubtype.5way, y=scale(bef.Post1.Gab0.Homogeneity), fill=MolecularSubtype.5way)) + geom_boxplot() + theme_classic(base_size = 24) + geom_jitter(width=0.1, height=0.01) + theme(text = element_text(size=24)) + ylim(-4, 12) + stat_compare_means(size=8) +stat_compare_means(aes(label = paste0("p =", ..p.format..)), tip_length = 0.005, size=1.0, comparisons = my_comparisons, method = "wilcox") + scale_fill_manual(legend_title, labels = c("Luminal", "HER2+", "Triple negative"), values = wes_palette("Darjeeling")) + theme(axis.text=element_text(size=26, face="bold"), axis.title = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.position = "top", legend.title = element_text(size=24), legend.text = element_text(size=24)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) + ggtitle("Radiomics Texture measures vs. Molecular subtype") + geom_hline(yintercept = 0, linetype="dashed", color="black", size=1)
+  g3$layers[[2]]$geom_params$na.rm=TRUE
+  g3$layers[[2]]$stat_params$tip_length = 0.001
+  g3$layers[[2]]$aes_params$textsize = 12
+  g3 <- ggpar(g3, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+  ggsave("BoxplotPrePost1Gab0HomogeneityMolecularNew.pdf", g3, dpi=300)
+  
+```
+
+
+
+
+pCR Europe
+
+```{r, echo=FALSE, warning=FALSE}
+  require(mRMRe)
+  require(caret)
+  
+  t_set <- rbind(train_set, val_set)
+  indxValid = t_set$MolecularSubtype.5way!=5
+  t_set <- t_set[indxValid,]
+  
+  train_set <- t_set[train,]
+  val_set <- t_set[validation,]
+  set.seed(1000)
+  
+  fnamesAll <- c(fnamesPre, fnamesAf, fnamesDiff)
+  Response <- as.factor(train_set$pCR.Europe)
+  
+  featuredata <- train_set[, names(train_set) %in% c(fnamesAll,  "pCR.Europe")]
+  
+  featuredata$pCR.Europe <- as.ordered(featuredata$pCR.Europe)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesAll)*0.8))
+  
+  train_set$pCR.Europe <- replace(train_set$pCR.Europe, train_set$pCR.Europe == 0, "pCR")
+  train_set$pCR.Europe <- replace(train_set$pCR.Europe, train_set$pCR.Europe == 1, "nCR")
+  train_set$pCR.Europe <- as.factor(train_set$pCR.Europe)
+  
+  val_set$pCR.Europe <- replace(val_set$pCR.Europe, val_set$pCR.Europe == 0, "pCR")
+  val_set$pCR.Europe <- replace(val_set$pCR.Europe, val_set$pCR.Europe == 1, "nCR")
+  val_set$pCR.Europe <- as.factor(val_set$pCR.Europe)
+  
+  
+  findx <- unlist(solutions(filter), use.names=FALSE)
+  findx <- findx-1
+  
+  clin.data <- train_set
+  
+  train_set <- clin.data[, names(clin.data) %in% fnamesAll[findx]]
+  for (i in 1 : length(findx)) {
+     train_set[,i] <- clin.data[, names(clin.data)%in% fnamesAll[findx[i]]]
+  }
+  colnames(train_set) <- fnamesAll[findx]
+  
+  ## pre-select predictors
+  print("GLMNET")
+  objControl <- trainControl(method="cv", number = 3, search = "grid", classProb = TRUE, savePredictions = "final", summaryFunction = twoClassSummary, sampling = "up")
+  eGrid <- expand.grid(.alpha = (1:10)*0.1, .lambda = seq(0.005, 0.1, by=0.005)) #seq(0.01,0.5, by=0.02)) 
+  
+    bestModelGLM <- train(train_set, clin.data$pCR.Europe, method = 'glmnet', trControl = objControl, tuneGrid = eGrid, preProcess = c("scale", "center", "knnImpute"))
+  plot(bestModelGLM)
+  print(bestModelGLM$results[bestModelGLM$results$alpha==bestModelGLM$bestTune$alpha & bestModelGLM$results$lambda==bestModelGLM$bestTune$lambda,])
+  
+  impFeats <- varImp(bestModelGLM)
+  indxF <- impFeats[[1]]$Overall > 0.1
+  glmFnames <- rownames(impFeats[[1]])
+  bestglmFeats <- glmFnames[indxF]
+
+  ## Recursive feature elimination RF 
+   rfCtrl <- trainControl(method = "cv", number = 5, classProbs=TRUE, savePredictions = "final", search="grid", summaryFunction=twoClassSummary, sampling = "smote")
+ 
+   rfeCtrl <- rfeControl(functions = caretFuncs, method = "cv", number = 5, returnResamp = "final", verbose = TRUE)
+   rfFit <- rfe(train_set[, names(train_set)%in% bestglmFeats], clin.data$pCR.Europe, sizes = c(5, 10, 12, 15, 17, 20), rfeControl = rfeCtrl, method = "rf", metric = "ROC", trControl = rfCtrl, ntree = 1000, preProcess = c("scale", "center"))
+  
+  impRFFeats <- varImp(rfFit$fit)
+  indxF <- impRFFeats[[1]]$Overall > 10
+  RFFnames <- rownames(impRFFeats[[1]])
+  bestRFFeats <- RFFnames[indxF]
+  
+  plot(rfFit$fit)
+  rocRFERFRad <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$pCR, ci = TRUE, smooth = FALSE)
+  confusionMatrix(rfFit$fit$pred$pred, rfFit$fit$pred$obs)
+  
+  rfFit$optVariables
+  plot(varImp(rfFit$fit))
+  
+  RFVal <- predict(object = rfFit$fit, val_set[, names(val_set) %in% bestglmFeats])
+  confusionMatrix(RFVal, val_set$pCR.Europe)
+  resprob = predict(rfFit$fit, val_set[, names(val_set) %in% bestglmFeats], type="prob")
+  rocRFValRad <- roc(val_set$pCR.Europe, resprob[,2], ci = TRUE, smooth = FALSE)
+  
+  roc.test(rocRFERFRad, rocRFValRad)
+  
+  rC <- data.frame(c(rocRFERFRad$sensitivities, rocRFValRad$sensitivities), c(1.0-rocRFERFRad$specificities,1.0-rocRFValRad$specificities), c(rep("CV (R)", length(rocRFERFRad$sensitivities)), rep("Test (R)", length(rocRFValRad$sensitivities))))
+  colnames(rC) <- c("Sensitivity", "Specificity", "Method")
+  
+    require(wesanderson)
+  
+   g1 <- ggplot(rC, aes(Specificity, Sensitivity, color=Method, linetype = Method)) + geom_path(size=1.5) + scale_linetype_manual(values = c("solid", "solid", "dotdash", "longdash")) + scale_color_manual(values = wes_palette("Cavalcanti")) + theme_pubr(base_size=24) + xlab("1-Specificity") + ylab("Sensitivity\n") + theme(plot.title = element_text(hjust = 0.0), axis.text=element_text(size=18), axis.title = element_text(size=24),  axis.title.x = element_text(size=20), axis.title.y = element_text(size=20)) + labs(title = "Reciever operating curve for pCR vs. no pCR") + theme(axis.text=element_text(size=24, face="bold"), legend.text=element_text(size=24), legend.title = element_text(size=26), legend.position = c(0.75, 0.4)) + guides(linetype = guide_legend(nrow = 2)) + theme(legend.background = element_rect(fill="white", size=0.25, linetype = "solid", color="black"))
+
+library(gridExtra)
+ mytheme <- gridExtra::ttheme_default(
+  core = list(fg_params=list(cex = 2.0)),
+  colhead = list(fg_params=list(cex = 1.0)),
+  rowhead = list(fg_params=list(cex = 1.0)))
+  
+
+mydata <- data.frame(TPR=c(0.55,0.24),TNR=c(0.66,0.60),PPV=c(0.44,0.26), NPV = c(0.75,0.57))
+mytable <- cbind(Accuracy = c("CV", "Test"), mydata)
+g2 <- g1 + annotation_custom(tableGrob(mytable, theme=mytheme), xmin=0.2, xmax=0.95, ymin=0.0, ymax=0.2)
+g2$layers[[2]]$aes_params$textsize = 6
+
+ggsave("FigureROCCurvesPCRRadEuropeNew.tiff", g2, dpi=300)
+ggsave("FigureROCCurvesPCRRadEuropeNew.pdf", g2, dpi=300)
+
+g3<- ggplot(varImp(rfFit$fit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=14))
+ggsave("FigureRFERFFeatureImportancepCRRadEuropeNew.tiff", g3, dpi=300)
+ggsave("FigureRFERFFeatureImportancepCRRadEuropeNew.pdf", g3, dpi=300)
+
+```
+
+#pCR Europe
+Use RF classifier to distinguish pCR USA vs. no pCR USA with Molecular Subtype
+```{r, echo=FALSE, warning=FALSE}
+  require(mRMRe)
+  require(caret)
+  
+  t_set <- rbind(train_set, val_set)
+  indxValid = t_set$MolecularSubtype.5way!=5
+  t_set <- t_set[indxValid,]
+  
+  train_set <- t_set[train,]
+  val_set <- t_set[validation,]
+  set.seed(1000)
+  
+  fnamesAll <- c(fnamesPre, fnamesAf, fnamesDiff)
+  Response <- as.factor(train_set$pCR.Europe)
+  
+  fnamesAll <- c(fnamesAll, "MolecularSubtype.5way")
+  featuredata <- train_set[, names(train_set) %in% c(fnamesAll,  "pCR.Europe")]
+  
+  featuredata$MolecularSubtype.5way <- as.ordered(featuredata$MolecularSubtype.5way)
+  
+  featuredata$pCR.Europe <- as.ordered(featuredata$pCR.Europe)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesAll)*0.8))
+  
+  train_set$pCR.Europe <- replace(train_set$pCR.Europe, train_set$pCR.Europe == 0, "pCR")
+  train_set$pCR.Europe <- replace(train_set$pCR.Europe, train_set$pCR.Europe == 1, "nCR")
+  train_set$pCR.Europe <- as.factor(train_set$pCR.Europe)
+  
+  val_set$pCR.Europe <- replace(val_set$pCR.Europe, val_set$pCR.Europe == 0, "pCR")
+  val_set$pCR.Europe <- replace(val_set$pCR.Europe, val_set$pCR.Europe == 1, "nCR")
+  val_set$pCR.Europe <- as.factor(val_set$pCR.Europe)
+  
+  
+  findx <- unlist(solutions(filter), use.names=FALSE)
+  findx <- findx-1
+  
+  clin.data <- train_set
+  
+  train_set <- clin.data[, names(clin.data) %in% fnamesAll[findx]]
+  for (i in 1 : length(findx)) {
+     train_set[,i] <- clin.data[, names(clin.data)%in% fnamesAll[findx[i]]]
+  }
+  colnames(train_set) <- fnamesAll[findx]
+  
+  ## pre-select predictors
+  print("GLMNET")
+  objControl <- trainControl(method="cv", number = 3, search = "grid", classProb = TRUE, savePredictions = "final", summaryFunction = twoClassSummary, sampling = "up")
+  eGrid <- expand.grid(.alpha = (1:10)*0.1, .lambda = seq(0.005, 0.1, by=0.005)) #seq(0.01,0.5, by=0.02)) 
+  
+    bestModelGLM <- train(train_set, clin.data$pCR.Europe, method = 'glmnet', trControl = objControl, tuneGrid = eGrid, preProcess = c("scale", "center", "knnImpute"))
+  plot(bestModelGLM)
+  print(bestModelGLM$results[bestModelGLM$results$alpha==bestModelGLM$bestTune$alpha & bestModelGLM$results$lambda==bestModelGLM$bestTune$lambda,])
+  
+  impFeats <- varImp(bestModelGLM)
+  indxF <- impFeats[[1]]$Overall > 0.1
+  glmFnames <- rownames(impFeats[[1]])
+  bestglmFeats <- glmFnames[indxF]
+
+  ## Recursive feature elimination RF 
+   rfCtrl <- trainControl(method = "cv", number = 5, classProbs=TRUE, savePredictions = "final", search="grid", summaryFunction=twoClassSummary, sampling = "smote")
+ 
+   rfeCtrl <- rfeControl(functions = caretFuncs, method = "cv", number = 5, returnResamp = "final", verbose = TRUE)
+   rfFit <- rfe(train_set[, names(train_set)%in% bestglmFeats], clin.data$pCR.Europe, sizes = c(5, 10, 12, 15, 17, 20), rfeControl = rfeCtrl, method = "rf", metric = "ROC", trControl = rfCtrl, ntree = 1000, preProcess = c("scale", "center"))
+  
+  impRFFeats <- varImp(rfFit$fit)
+  indxF <- impRFFeats[[1]]$Overall > 40
+  RFFnames <- rownames(impRFFeats[[1]])
+  bestRFFeats <- RFFnames[indxF]
+  
+  plot(rfFit$fit)
+  rocRFERF <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$pCR, ci = TRUE, smooth = FALSE)
+  confusionMatrix(rfFit$fit$pred$pred, rfFit$fit$pred$obs)
+  
+  rfFit$optVariables
+  plot(varImp(rfFit$fit))
+  
+  RFVal <- predict(object = rfFit$fit, val_set[, names(val_set) %in% bestglmFeats])
+  confusionMatrix(RFVal, val_set$pCR.Europe)
+  resprob = predict(rfFit$fit, val_set[, names(val_set) %in% bestglmFeats], type="prob")
+  rocRFVal <- roc(val_set$pCR.Europe, resprob[,2], ci = TRUE, smooth = FALSE)
+  
+  roc.test(rocRFERF, rocRFVal)
+  roc.test(rocRFERFRad, rocRFERF)
+  roc.test(rocRFValRad, rocRFVal)
+  
+  
+  rC <- data.frame(c(rocRFERF$sensitivities, rocRFERFRad$sensitivities, rocRFVal$sensitivities, rocRFValRad$sensitivities), c(1.0-rocRFERF$specificities, 1.0-rocRFERFRad$specificities, 1.0-rocRFVal$specificities,  1.0-rocRFValRad$specificities), c(rep("CV (R+S)", length(rocRFERF$sensitivities)), rep("CV (R)", length(rocRFERFRad$sensitivities)), rep("Test (R+S)", length(rocRFVal$sensitivities)), rep("Test (R)", length(rocRFValRad$sensitivities))))
+  colnames(rC) <- c("Sensitivity", "Specificity", "Method")
+  
+    require(wesanderson)
+  
+   g1 <- ggplot(rC, aes(Specificity, Sensitivity, color=Method, linetype = Method)) + geom_path(size=1.5) + scale_linetype_manual(values = c("solid", "solid", "dotdash", "longdash")) + scale_color_manual(values = wes_palette("Cavalcanti")) + theme_pubr(base_size=24) + xlab("1-Specificity") + ylab("Sensitivity\n") + theme(plot.title = element_text(hjust = 0.0), axis.text=element_text(size=18), axis.title = element_text(size=24),  axis.title.x = element_text(size=20), axis.title.y = element_text(size=20)) + labs(title = "Reciever operating curve for pCR vs. no pCR") + theme(axis.text=element_text(size=24, face="bold"), legend.text=element_text(size=24), legend.title = element_text(size=26), legend.position = c(0.75, 0.4)) + guides(linetype = guide_legend(nrow = 4)) + theme(legend.background = element_rect(fill="white", size=0.25, linetype = "solid", color="black"))
+
+library(gridExtra)
+ mytheme <- gridExtra::ttheme_default(
+  core = list(fg_params=list(cex = 2.0)),
+  colhead = list(fg_params=list(cex = 1.0)),
+  rowhead = list(fg_params=list(cex = 1.0)))
+  
+
+mydata <- data.frame(TPR=c(0.55,0.68,0.24,0.59),TNR=c(0.66,0.59,0.60,0.92),PPV=c(0.44,0.59,0.26,0.77), NPV = c(0.75,0.81,0.57,0.84))
+mytable <- cbind(Accuracy = c("CV(R+S)", "CV(R)", "Test(R+S)", "Test(R"), mydata)
+g2 <- g1 + annotation_custom(tableGrob(mytable, theme=mytheme), xmin=0.2, xmax=0.95, ymin=0.0, ymax=0.2)
+g2$layers[[2]]$aes_params$textsize = 6
+
+ggsave("FigureROCCurvesPCREuropeMolecularNew.tiff", g2, dpi=300)
+ggsave("FigureROCCurvesPCREuropeMolecularNew.pdf", g2, dpi=300)
+
+g3<- ggplot(varImp(rfFit$fit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=14))
+ggsave("FigureRFERFFeatureImportancepCREuropeMolecularNew.tiff", g3, dpi=300)
+ggsave("FigureRFERFFeatureImportancepCREuropeMolecularNew.pdf", g3, dpi=300)
+
+```
+
+
+Molecular subtype vs. outcomes
+```{r, echo=FALSE, warning=FALSE}
+
+  kruskal.test(t_set$pCR.USA~t_set$MolecularSubtype.5way)
+  pairwise.wilcox.test(t_set$pCR.USA, t_set$MolecularSubtype.5way,  p.adjust.method = "bonferroni")
+  
+  kruskal.test(t_set$pCR.Europe~t_set$MolecularSubtype.5way)
+  pairwise.wilcox.test(t_set$pCR.Europe, t_set$MolecularSubtype.5way,  p.adjust.method = "bonferroni")
+```
+
+
+
+```{r, echo=F, warning=F}
+  t_set <- rbind(train_set, val_set)
+  t_set$pCR.Europe = replace(t_set$pCR.Europe, t_set$pCR.Europe==0, "nCR")
+  t_set$pCR.Europe = replace(t_set$pCR.Europe, t_set$pCR.Europe==1, "pCR")
+  
+  t_set$pCR.Europe <- as.factor(t_set$pCR.Europe)
+  snames <- bestRFFeats
+  
+  relIndx = rep(TRUE, length(snames))
+  pVals = rep(0, length(snames))
+  for (i in 1 : length(snames)) {
+    
+    p <- wilcox.test(t_set[,names(t_set)%in% snames[i]] ~ pCR.Europe, data=t_set)
+    if(p$p.value > 0.05) {
+      relIndx[i] <- FALSE
+      pVals[i] <- p$p.value
+    }
+    else{
+      pVals[i] <- p$p.value
+    }
+  }
+  padjVal <- p.adjust(pVals, method="holm")
+  legend_title = "Response"
+  pIndx <- padjVal < 0.05
+  
+  fnames = c(snames[pIndx], "pCR.Europe")
+  dataPD <- t_set[, names(t_set)%in% fnames]
+  dataPD <- subset(dataPD, select = c(2, 1, 3))
+  cnames <- colnames(dataPD)
+  cnames[1] <- "pCR"
+  colnames(dataPD) <- cnames
+  dataPD$MolecularSubtype.5way = dataPD$MolecularSubtype.5way*10
+  dataPD$af.Pre.mean = dataPD$af.Pre.mean*10
+  require(reshape2)
+  
+  df <- melt(dataPD, id.vars = "pCR", measure.vars = c("af.Pre.mean", "MolecularSubtype.5way"))
+  
+  
+  my_comparisons <- list(c("nCR.af.Pre.mean", "pCR.af.Pre.mean"), c("nCR.MolecularSubtype.5way", "pCR.MolecularSubtype.5way"))
+  
+  df$PCRVar <- interaction(df$pCR, df$variable)
+  g2 <- ggplot(data=df, aes(x=factor(PCRVar), y=value, fill=pCR)) + geom_boxplot() + theme_pubr(base_size=24) + scale_x_discrete(labels = c("nCR.af.Pre.mean" = "post-NAC \n pre-contrast \n Mean", "pCR.af.Pre.mean" = "", "nCR.MolecularSubtype.5way" = "Molecular \n Subtype", "pCR.MolecularSubtype.5way" = "")) + ylim(-28, 50) +  scale_fill_manual(legend_title, labels = c("pCR", "no pCR"), values = wes_palette("GrandBudapest")) +  stat_compare_means(aes(label = paste0("p =", ..p.format..)), tip_length = 0.005, size=1.0, comparisons = my_comparisons, method = "wilcox", label.y = 45) +   theme(axis.text=element_text(size=20), axis.title = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), legend.title = element_text(size=24), legend.text = element_text(size=20)) + theme(legend.background = element_rect(fill="white", size=0.5, linetype="solid", color="black")) + ggtitle("Radiomics & Clinical Measures vs. pCR") + geom_hline(yintercept = 0, linetype="dashed", color="black", size=1)
+  g2$layers[[2]]$geom_params$na.rm=TRUE
+  g2$layers[[2]]$stat_params$tip_length = 0.01
+  g2$layers[[2]]$aes_params$textsize = 10
+  g2 <- ggpar(g2, font.legend = c(24, "bold"), font.title = c(24, "bold"))  
+
+  ggsave("RadiomicsMolecularpCREuropeNew.pdf", g2, dpi=300)
+  
+ 
+```
+
+PCR Europe
+```{r, echo=F, warning=F}
+  
+  t_set$pCR.Europe = replace(t_set$pCR.Europe, t_set$pCR.Europe==0, "nCR")
+  t_set$pCR.Europe = replace(t_set$pCR.Europe, t_set$pCR.Europe==1, "pCR")
+  
+  t_set$pCR.Europe <- as.factor(t_set$pCR.Europe)
+
+   ggplot(t_set, aes(x=pCR.Europe, y=diff.cSE, fill=pCR.Europe)) + geom_boxplot() + theme_classic(base_size = 14) + geom_jitter(width=0.1, height=0.01) + theme(text = element_text(size=14)) + stat_compare_means(size=5, label.x = 1.25, label.y = -1) 
+    
+      ggplot(t_set, aes(x=pCR.Europe, y=af.cSE, fill=pCR.Europe)) + geom_boxplot() + theme_classic(base_size = 14) + geom_jitter(width=0.1, height=0.01) + theme(text = element_text(size=14)) + stat_compare_means(size=5, label.x = 1.25, label.y = 0) 
+      
+      ggplot(t_set, aes(x=pCR.Europe, y=bef.cSE, fill=pCR.Europe)) + geom_boxplot() + theme_classic(base_size = 14) + geom_jitter(width=0.1, height=0.01) + theme(text = element_text(size=14)) + stat_compare_means(size=5, label.x = 1.25, label.y = 0) 
+
+  relIndx = rep(TRUE, length(snames))
+  pVals = rep(0, length(snames))
+  for (i in 1 : length(snames)) {
+    
+    p <- wilcox.test(t_set[,names(t_set)%in% snames[i]] ~ pCR.Europe, data=t_set)
+    if(p$p.value > 0.05) {
+      relIndx[i] <- FALSE
+      pVals[i] <- p$p.value
+    }
+    else{
+      pVals[i] <- p$p.value
+    }
+  }
+  p.adjust(pVals[relIndx], method="holm")
+  p.adjust(pVals, method="holm")
+  
+
+   g1 <- ggplot(t_set, aes(x=pCR.Europe, y=diff.Pre.Homogeneity, fill=pCR.Europe)) + geom_boxplot() + theme_pubr(base_size = 14) + geom_jitter(width=0.1, height=0.01) + theme(text = element_text(size=14)) + stat_compare_means(size=5) 
+   
+   g2 <- ggplot(t_set, aes(x=pCR.Europe, y=diff.Post3.Energy, fill=pCR.Europe)) + geom_boxplot() + theme_pubr(base_size = 14) + geom_jitter(width=0.1, height=0.01) + theme(text = element_text(size=14)) + stat_compare_means(size=5) 
+  
+   res <- ggarrange(g1, g2, ncol = 2, nrow=1)
+   ggsave("FigurePCREurFeatures.pdf", g2, dpi=300)
+   ggsave("FigurePCREurFeatures.tiff", g2, dpi=300)
+  
+
+```
+
+
+### Maximal residual disease
+
+```{r, echo=FALSE, warning=FALSE}
+  require(mRMRe)
+  require(caret)
+
+  t_set$MRD <- as.numeric(t_set$MaximumResidualDisease < 2)
+  
+  train_set <- t_set[train,]
+  val_set <- t_set[validation,]
+  set.seed(1000)
+  
+  means <- colMeans(train_set[, names(train_set)%in% fnamesAll])
+  sds <- colsd_(train_set[,names(train_set) %in% fnamesAll])
+  val_feat <- (val_set - means)/sds
+  
+  Response <- as.factor(train_set$pCR.USA)
+  
+  featuredata <- train_set[, names(train_set) %in% c(fnamesAll, "MRD")]
+  
+  featuredata$MRD <- as.ordered(featuredata$MRD)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesAll)*0.8))
+  
+  train_set$MRD <- replace(train_set$MRD, train_set$MRD == 0, "pMRD")
+  train_set$MRD <- replace(train_set$MRD, train_set$MRD == 1, "nMRD")
+  train_set$MRD <- as.factor(train_set$MRD)
+  
+  val_set$MRD <- replace(val_set$MRD, val_set$MRD == 0, "pMRD")
+  val_set$MRD <- replace(val_set$MRD, val_set$MRD == 1, "nMRD")
+  val_set$MRD <- as.factor(val_set$MRD)
+  
+  
+  findx <- unlist(solutions(filter), use.names=FALSE)
+  findx <- findx-1
+  
+  clin.data <- train_set
+  
+  train_set <- clin.data[, names(clin.data) %in% fnamesAll[findx]]
+  for (i in 1 : length(findx)) {
+     train_set[,i] <- clin.data[, names(clin.data)%in% fnamesAll[findx[i]]]
+  }
+  colnames(train_set) <- fnamesAll[findx]
+  
+  ## pre-select predictors
+  print("GLMNET")
+  objControl <- trainControl(method="cv", number = 3, search = "grid", classProb = TRUE, savePredictions = "final", summaryFunction = twoClassSummary, sampling = "up")
+    eGrid <- expand.grid(.alpha = (1:10)*0.1, .lambda = seq(0.005, 0.1, by=0.005)) #seq(0.01,0.5, by=0.02)) 
+    bestModelGLM <- train(train_set, clin.data$MRD, method = 'glmnet', trControl = objControl, tuneGrid = eGrid, preProcess = c("scale", "center"))
+  plot(bestModelGLM)
+  print(bestModelGLM$results[bestModelGLM$results$alpha==bestModelGLM$bestTune$alpha & bestModelGLM$results$lambda==bestModelGLM$bestTune$lambda,])
+  
+  impFeats <- varImp(bestModelGLM)
+  indxF <- impFeats[[1]]$Overall > 0.1
+  glmFnames <- rownames(impFeats[[1]])
+  bestglmFeats <- glmFnames[indxF]
+
+  ## Recursive feature elimination RF 
+   rfCtrl <- trainControl(method = "cv", number = 5, classProbs=TRUE, savePredictions = "final", search="grid", summaryFunction=twoClassSummary, sampling = "smote")
+ 
+   rfeCtrl <- rfeControl(functions = caretFuncs, method = "cv", number = 5, returnResamp = "final", verbose = TRUE)
+   rfFit <- rfe(train_set[, names(train_set)%in% bestglmFeats], clin.data$MRD, sizes = c(5, 10, 12, 15, 17, 20), rfeControl = rfeCtrl, method = "rf", 
+                metric = "ROC", trControl = rfCtrl, ntree = 1000, preProcess = c("scale", "center"))
+  
+  impRFFeats <- varImp(rfFit$fit)
+  indxF <- impRFFeats[[1]]$Overall > 50
+  RFFnames <- rownames(impRFFeats[[1]])
+  bestRFFeats <- RFFnames[indxF]
+  
+  plot(rfFit$fit)
+  rocRFERFRad <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$pMRD, ci = TRUE, smooth = FALSE)
+  confusionMatrix(rfFit$fit$pred$pred, rfFit$fit$pred$obs)
+  print(rocRFERFRad)
+  
+  
+  rfFit$optVariables
+  plot(varImp(rfFit$fit))
+  
+  means <- colMeans(train_set[, names(train_set)%in% fnamesAll])
+  sds <- colsd_(train_set[,names(train_set) %in% fnamesAll])
+  val_feat <- (val_set - means)/sds
+  
+  
+  RFVal <- predict(object = rfFit$fit, val_set[, names(val_set) %in% bestglmFeats])
+  confusionMatrix(RFVal, val_set$MRD)
+  resprob = predict(rfFit$fit, val_set[, names(val_set) %in% bestglmFeats], type="prob")
+  rocRFValRad <- roc(val_set$MRD, resprob[,2], ci = TRUE, smooth = FALSE)
+  print(rocRFValRad)
+  roc.test(rocRFERFRad, rocRFValRad)
+  
+  rC <- data.frame(c(rocRFERFRad$sensitivities, rocRFValRad$sensitivities), c(1.0-rocRFERFRad$specificities, 1.0-rocRFValRad$specificities), c(rep("Cross validation", length(rocRFERFRad$sensitivities)), rep("True validation", length(rocRFValRad$sensitivities))))
+  colnames(rC) <- c("Sensitivity", "Specificity", "Test")
+  
+    require(wesanderson)
+  
+   g1 <- ggplot(rC, aes(Specificity, Sensitivity, color=Test, linetype = Test)) + geom_path(size=1.5) + scale_linetype_manual(values = c("dotted", "solid")) + scale_color_manual(values = wes_palette("Darjeeling")) + theme_pubr(base_size=24) + xlab("1-Specificity") + ylab("Sensitivity\n") + theme(plot.title = element_text(hjust = 0.0), axis.text=element_text(size=18), axis.title = element_text(size=24),  axis.title.x = element_text(size=20), axis.title.y = element_text(size=20)) + labs(title = "Reciever operating curve for MRD") + theme(axis.text=element_text(size=24, face="bold"), legend.text=element_text(size=24), legend.title = element_text(size=26), legend.position = c(0.75, 0.35)) + guides(linetype = guide_legend(nrow = 2)) + theme(legend.background = element_rect(fill="white", size=0.25, linetype = "solid", color="black"))
+
+library(gridExtra)
+ mytheme <- gridExtra::ttheme_default(
+  core = list(fg_params=list(cex = 2.0)),
+  colhead = list(fg_params=list(cex = 1.0)),
+  rowhead = list(fg_params=list(cex = 1.0)))
+  
+
+mydata <- data.frame(TPR=c(0.56,0.39),TNR=c(0.79,0.86),PPV=c(0.50,0.45), NPV = c(0.82, 0.82))
+mytable <- cbind(Accuracy = c("Cross-Validation", "Test"), mydata)
+g2 <- g1 + annotation_custom(tableGrob(mytable, theme=mytheme), xmin=0.3, xmax=0.96, ymin=0.0, ymax=0.2)
+g2$layers[[2]]$aes_params$textsize = 6
+
+ggsave("FigureROCCurvesMRDNew.tiff", g2, dpi=300)
+ggsave("FigureROCCurvesMRDNew.pdf", g2, dpi=300)
+
+g3<- ggplot(varImp(rfFit$fit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=14))
+ggsave("FigureRFERFFeatureImportanceMRDNew.tiff", g3, dpi=300)
+ggsave("FigureRFERFFeatureImportanceMRDNew.pdf", g3, dpi=300)
+
+```
+
+
+
+Distinguish Triple Negative vs. Rest 
+
+```{r, echo=FALSE, warning=FALSE}
+  require(mRMRe)
+  require(caret)
+  require(ggpubr)
+  require(gridExtra)
+  
+  set.seed(1000)
+  
+  featuredata <- train_set[, names(train_set) %in% c(fnamesAll, "MolecularSubtype.3way")]
+  
+  featuredata$MolecularSubtype.3way <- as.ordered(featuredata$MolecularSubtype.3way)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesAll)*0.8))
+ 
+   train_set$MolecularSubtype.3way = replace(train_set$MolecularSubtype.3way, train_set$MolecularSubtype.3way !=3, "LuminalOrHER2")
+  train_set$MolecularSubtype.3way = replace(train_set$MolecularSubtype.3way, train_set$MolecularSubtype.3way==3, "TN")
+  
+  train_set$MolecularSubtype.3way = as.factor(train_set$MolecularSubtype.3way)
+  
+  val_set$MolecularSubtype.3way = replace(val_set$MolecularSubtype.3way, val_set$MolecularSubtype.3way !=3, "LuminalOrHER2")
+  val_set$MolecularSubtype.3way = replace(val_set$MolecularSubtype.3way, val_set$MolecularSubtype.3way==3, "TN")
+  
+  val_set$MolecularSubtype.3way = as.factor(val_set$MolecularSubtype.3way)
+ 
+  train_set <- droplevels(train_set)
+  val_set <- droplevels(val_set)
+  
+  featuredata <- train_set[, names(train_set) %in% c(fnamesAll, "MolecularSubtype.3way")]
+  
+  featuredata$Erstatus <- as.ordered(featuredata$MolecularSubtype.3way)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesAll)*0.6))
+  
+  train_set$Erstatus <- replace(train_set$Erstatus, train_set$Erstatus == 0, "ERneg")
+  train_set$Erstatus <- replace(train_set$Erstatus, train_set$Erstatus == 1, "ERpos")
+  train_set$Erstatus <- as.factor(train_set$Erstatus)
+  
+  val_set$Erstatus <- replace(val_set$Erstatus, val_set$Erstatus == 0, "ERneg")
+  val_set$Erstatus <- replace(val_set$Erstatus, val_set$Erstatus == 1, "ERpos")
+  val_set$Erstatus <- as.factor(val_set$Erstatus)
+  
+  
+  findx <- unlist(solutions(filter), use.names=FALSE)
+  findx <- findx-1
+  
+  clin.data <- train_set
+  
+  train_set <- clin.data[, names(clin.data) %in% fnamesAll[findx]]
+  for (i in 1 : length(findx)) {
+     train_set[,i] <- clin.data[, names(clin.data)%in% fnamesAll[findx[i]]]
+  }
+  colnames(train_set) <- fnamesAll[findx]
+  
+  ## pre-select predictors
+  print("GLMNET")
+  objControl <- trainControl(method="cv", number = 3, search = "grid", classProb = TRUE, savePredictions = "final", summaryFunction = twoClassSummary)
+  eGrid <- expand.grid(.alpha = (1:10)*0.1, .lambda = seq(0.005, 0.1, by=0.005)) #seq(0.01,0.5, by=0.02)) 
+    bestModelGLM <- train(train_set, clin.data$Erstatus, method = 'glmnet', trControl = objControl, tuneGrid = eGrid, preProcess = c("scale", "center"))
+  plot(bestModelGLM)
+  print(bestModelGLM$results[bestModelGLM$results$alpha==bestModelGLM$bestTune$alpha & bestModelGLM$results$lambda==bestModelGLM$bestTune$lambda,])
+  
+  impFeats <- varImp(bestModelGLM)
+  indxF <- impFeats[[1]]$Overall > 0.1
+  glmFnames <- rownames(impFeats[[1]])
+  bestglmFeats <- glmFnames[indxF]
+
+ 
+  
+  ## Recursive feature elimination RF 
+   rfCtrl <- trainControl(method = "cv", number = 5, classProbs=TRUE, savePredictions = "final", search="grid", summaryFunction=twoClassSummary)
+ 
+   rfeCtrl <- rfeControl(functions = caretFuncs, method = "cv", number = 5, returnResamp = "final", verbose = TRUE)
+   rfFit <- rfe(train_set[, names(train_set)%in% bestglmFeats], clin.data$Erstatus, sizes = c(5, 10, 15, 20, 25, 30), rfeControl = rfeCtrl, method = "rf", 
+                metric = "ROC", trControl = rfCtrl, ntree = 1000, preProcess = c("scale", "center"))
+  
+  impRFFeats <- varImp(rfFit$fit)
+  indxF <- impRFFeats[[1]]$Overall > 0.1
+  RFFnames <- rownames(impRFFeats[[1]])
+  bestRFFeats <- RFFnames[indxF]
+  
+  plot(rfFit$fit)
+  rocRFERF <- roc(rfFit$fit$pred$obs, rfFit$fit$pred$ERneg, ci = TRUE, smooth = TRUE)
+  confusionMatrix(rfFit$fit$pred$pred, rfFit$fit$pred$obs)
+  print(rocEFERF)
+  
+  rfFit$optVariables
+  plot(varImp(rfFit$fit))
+  
+  RFVal <- predict(object = rfFit$fit, val_set[, names(val_set) %in% bestglmFeats])
+  confusionMatrix(RFVal, val_set$Erstatus)
+  resprob = predict(rfFit$fit, val_set[, names(val_set) %in% bestglmFeats], type="prob")
+  rocRFVal <- roc(val_set$Erstatus, resprob[,2], ci = TRUE, smooth = TRUE)
+  
+  roc.test(rocRFERF, rocRFVal)
+  
+  rC <- data.frame(c(rocRFERF$sensitivities, rocRFVal$sensitivities), c(1.0-rocRFERF$specificities, 1.0-rocRFVal$specificities), c(rep("Cross validation", length(rocRFERF$sensitivities)), rep("True validation", length(rocRFVal$sensitivities))))
+  colnames(rC) <- c("Sensitivity", "Specificity", "Test")
+  
+    require(wesanderson)
+  
+   g1 <- ggplot(rC, aes(Specificity, Sensitivity, color=Test, linetype = Test)) + geom_path(size=1.5) + scale_linetype_manual(values = c("dotted", "solid")) + scale_color_manual(values = wes_palette("Darjeeling")) + theme_pubr(base_size=18) + xlab("1-Specificity") + ylab("Sensitivity\n") + theme(plot.title = element_text(hjust = 0.0), axis.text=element_text(size=12), axis.title = element_text(size=18),  axis.title.x = element_text(size=18), axis.title.y = element_text(size=18)) + labs(title = "Reciever operating curve for Triple Negative vs. Rest") + theme(axis.text=element_text(size=16, face="bold"), legend.title = element_text(size=18), legend.position = c(0.75, 0.3)) + guides(linetype = guide_legend(nrow = 2)) + theme(legend.background = element_rect(fill="white", size=0.25, linetype = "solid", color="black"))
+
+library(gridExtra)
+mydata <- data.frame(TPR=c(0.59,0.55),TNR=c(0.66,0.76),PPV=c(0.61,0.60), NPV = c(0.64, 0.71))
+mytable <- cbind(Accuracy = c("Cross-Validation", "Test"), mydata)
+g2 <- g1 + annotation_custom(tableGrob(mytable), xmin=0.5, xmax=0.99, ymin=0.0, ymax=0.2)
+
+ggsave("FigureROCCurvesTN.tiff", g2, dpi=300)
+ggsave("FigureROCCurvesTN.pdf", g2, dpi=300)
+
+g3<- ggplot(varImp(rfFit$fit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=14))
+ggsave("FigureRFERFFeatureImportancepTN.tiff", g3, dpi=300)
+ggsave("FigureRFERFFeatureImportancepTN.pdf", g3, dpi=300)
+
+```
+
+
+```{r, echo=FALSE, warning=FALSE}
+
+  
+
+  featuredata <- train_set[, names(train_set) %in% c(fnamesAll, "MolecularSubtype.3way")]
+  
+  featuredata$MolecularSubtype.3way <- as.ordered(featuredata$MolecularSubtype.3way)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesAll)*0.8))
+ 
+   train_set$MolecularSubtype.3way = replace(train_set$MolecularSubtype.3way, train_set$MolecularSubtype.3way !=3, "LuminalOrHER2")
+  train_set$MolecularSubtype.3way = replace(train_set$MolecularSubtype.3way, train_set$MolecularSubtype.3way==3, "TN")
+  
+  train_set$MolecularSubtype.3way = as.factor(train_set$MolecularSubtype.3way)
+  
+  val_set$MolecularSubtype.3way = replace(val_set$MolecularSubtype.3way, val_set$MolecularSubtype.3way !=3, "LuminalOrHER2")
+  val_set$MolecularSubtype.3way = replace(val_set$MolecularSubtype.3way, val_set$MolecularSubtype.3way==3, "TN")
+  
+  val_set$MolecularSubtype.3way = as.factor(val_set$MolecularSubtype.3way)
+ 
+  train_set <- droplevels(train_set)
+  val_set <- droplevels(val_set)
+   
+  t <- unlist(scores(filter), use.names=FALSE)
+  mi_threshold <- median(t[!is.na(t)])
+  
+  findx <- unlist(solutions(filter), use.names=FALSE)
+  findx <- findx-1
+  useIndx = rep(TRUE, length(findx))
+  for (i in 1 : length(findx)) {
+    
+    p <- wilcox.test(train_set[,names(train_set)%in% fnamesAll[findx[i]]] ~ MolecularSubtype.3way, data=train_set)
+    if(p$p.value > 0.05) {
+      useIndx[i] <- FALSE
+    }
+  }
+  
+  
+  ntrain = length(train_set$MolecularSubtype.3way)
+  train.ext = createFolds(train_set$MolecularSubtype.3way, k = 10, returnTrain=TRUE)
+  test.ext = lapply(train.ext, function(x) (1:ntrain)[-x])
+  
+  #Preselect predictors 
+  print("GLMNET")
+  objControl <- trainControl(method="cv", number = 10, search = "grid", classProb = TRUE, savePredictions = "final", summaryFunction = twoClassSummary)
+  # for Gradient Boosting Machine (GBM)
+  trainCtrl <- trainControl(method = "cv", number=10, classProbs=TRUE, savePredictions = "final", search = "grid", summaryFunction=twoClassSummary)
+  gbmGrid <-  expand.grid(interaction.depth = c(1, 5, 9), 
+                        n.trees = (1:30)*50, 
+                        shrinkage = 0.01,
+                        n.minobsinnode = 20)
+    
+  eGrid <- expand.grid(.alpha = (1:10)*0.1, .lambda = seq(0.005, 0.1, by=0.005)) #seq(0.01,0.5, by=0.02)) 
+ 
+  i = 1
+  bestAcc = 0;
+  
+  bestModelGLM <- train(train_set[train.ext[[i]], names(train_set) %in% fnamesAll[findx[useIndx]]], train_set$MolecularSubtype.3way[train.ext[[i]]], method = 'glmnet', trControl = objControl, tuneGrid = eGrid)
+  plot(bestModelGLM)
+  print(bestModelGLM$results[bestModelGLM$results$alpha==bestModelGLM$bestTune$alpha & bestModelGLM$results$lambda==bestModelGLM$bestTune$lambda,])
+  
+   impFeats <- varImp(bestModelGLM)
+  indxF <- impFeats[[1]]$Overall > 1
+  glmFnames <- rownames(impFeats[[1]])
+  bestglmFeats <- glmFnames[indxF]
+  
+  bestGBMFit <- train(train_set[train.ext[[i]],names(train_set) %in% bestglmFeats], train_set$MolecularSubtype.3way[train.ext[[i]]], 
+                 method = "gbm", trControl = trainCtrl, verbose = FALSE, tuneGrid = gbmGrid)
+  plot(bestGBMFit)
+ 
+   print(bestGBMFit$results[bestGBMFit$results$shrinkage==bestGBMFit$bestTune$shrinkage & bestGBMFit$results$interaction.depth==bestGBMFit$bestTune$interaction.depth & bestGBMFit$results$n.trees==bestGBMFit$bestTune$n.trees & bestGBMFit$results$n.minobsinnode==bestGBMFit$bestTune$n.minobsinnode,])
+   
+   bestAcc = bestGBMFit$results$ROC[bestGBMFit$results$shrinkage==bestGBMFit$bestTune$shrinkage & bestGBMFit$results$interaction.depth==bestGBMFit$bestTune$interaction.depth & bestGBMFit$results$n.trees==bestGBMFit$bestTune$n.trees & bestGBMFit$results$n.minobsinnode==bestGBMFit$bestTune$n.minobsinnode]
+   
+   for(i in 2 : 10) {
+     print(i)
+     
+     ModelGLM <- train(train_set[train.ext[[i]], names(train_set) %in% fnamesAll[findx[useIndx]]], train_set$MolecularSubtype.3way[train.ext[[i]]], method = 'glmnet', trControl = objControl, tuneGrid = eGrid)
+  plot(ModelGLM)
+  print(ModelGLM$results[ModelGLM$results$alpha==ModelGLM$bestTune$alpha & ModelGLM$results$lambda==ModelGLM$bestTune$lambda,])
+  
+   impFeats <- varImp(ModelGLM)
+  indxF <- impFeats[[1]]$Overall > 1
+  glmFnames <- rownames(impFeats[[1]])
+  glmFeats <- glmFnames[indxF]
+  
+  GBMFit <- train(train_set[train.ext[[i]],names(train_set) %in% glmFeats], train_set$MolecularSubtype.3way[train.ext[[i]]], 
+                 method = "gbm", trControl = trainCtrl, verbose = FALSE, tuneGrid = gbmGrid)
+  plot(GBMFit)
+ 
+   print(GBMFit$results[GBMFit$results$shrinkage==GBMFit$bestTune$shrinkage & GBMFit$results$interaction.depth==GBMFit$bestTune$interaction.depth & GBMFit$results$n.trees==GBMFit$bestTune$n.trees & GBMFit$results$n.minobsinnode==GBMFit$bestTune$n.minobsinnode,])
+   
+   acc = GBMFit$results$ROC[GBMFit$results$shrinkage==GBMFit$bestTune$shrinkage & GBMFit$results$interaction.depth==GBMFit$bestTune$interaction.depth & GBMFit$results$n.trees==GBMFit$bestTune$n.trees & GBMFit$results$n.minobsinnode==GBMFit$bestTune$n.minobsinnode]
+     
+   if(acc > bestAcc) {
+     bestAcc = acc
+     bestGBMFit = GBMFit
+     bestglmFeats = glmFeats
+     bestModelGLM = ModelGLM
+   }
+  }
+  
+  plot(varImp(bestModelGLM))
+  
+  plot(varImp(bestGBMFit))
+  require(ggpubr)
+  ggplot(varImp(bestModelGLM)) + theme_pubr(base_size = 16) + theme(text = element_text(size=12))
+  g2 <- ggplot(varImp(bestGBMFit)) + theme_pubr(base_size = 16) + theme(text = element_text(size=14))
+  ggsave("FigureGBMFeatureImportanceTN.tiff", g2, dpi=300)
+  ggsave("FigureGBMFeatureImportanceTN.pdf", g2, dpi=300)
+  
+  
+  rocGLM <- roc(bestModelGLM$pred$obs[bestModelGLM$pred$alpha==bestModelGLM$bestTune$alpha & bestModelGLM$pred$lambda==bestModelGLM$bestTune$lambda], bestModelGLM$pred$ERpos[bestModelGLM$pred$alpha==bestModelGLM$bestTune$alpha & bestModelGLM$pred$lambda==bestModelGLM$bestTune$lambda], ci = TRUE, smooth=FALSE)
+  
+  confusionMatrix(bestModelGLM$pred$pred, bestModelGLM$pred$obs)
+  
+  gbmFit2 <- bestGBMFit
+  rocGBMFit <- roc(gbmFit2$pred$obs[gbmFit2$pred$n.trees==gbmFit2$bestTune$n.trees & gbmFit2$pred$n.minobsinnode==gbmFit2$bestTune$n.minobsinnode & 
+                                      gbmFit2$pred$shrinkage==gbmFit2$bestTune$shrinkage & 
+                                      gbmFit2$pred$interaction.depth==gbmFit2$bestTune$interaction.depth], 
+                   gbmFit2$pred$LuminalOrHER2[gbmFit2$pred$n.trees==gbmFit2$bestTune$n.trees & gbmFit2$pred$n.minobsinnode==gbmFit2$bestTune$n.minobsinnode & 
+                                      gbmFit2$pred$shrinkage==gbmFit2$bestTune$shrinkage & 
+                                      gbmFit2$pred$interaction.depth==gbmFit2$bestTune$interaction.depth], ci = TRUE)
+  confusionMatrix(gbmFit2$pred$pred, gbmFit2$pred$obs)
+  
+ ## validation results
+  predictions <- predict(object = bestGBMFit, val_set[, names(val_set) %in% bestglmFeats])
+  confusionMatrix(predictions, val_set$MolecularSubtype.3way)
+  resprob = predict(bestGBMFit, val_set[, names(val_set) %in% bestglmFeats], type="prob")
+  rocGBMVal <- roc(as.numeric(val_set$MolecularSubtype.3way=="TN"), resprob[,2], ci = TRUE)
+  
+  roc.test(rocGBMFit, rocGBMVal)
+  
+  rC <- data.frame(c(rocGBMFit$sensitivities, rocGBMVal$sensitivities), c(1.0-rocGBMFit$specificities, 1.0-rocGBMVal$specificities), c(rep("Cross validation", length(rocGBMFit$sensitivities)), rep("True validation", length(rocGBMVal$sensitivities))))
+  colnames(rC) <- c("Sensitivity", "Specificity", "Test")
+  
+    require(wesanderson)
+  
+   g1 <- ggplot(rC, aes(Specificity, Sensitivity, color=Test, linetype = Test)) + geom_path(size=1.5) + scale_linetype_manual(values = c("dotted", "solid")) + scale_color_manual(values = wes_palette("Darjeeling")) + theme_pubr(base_size=18) + xlab("1-Specificity") + ylab("Sensitivity\n") + theme(plot.title = element_text(hjust = 0.0), axis.text=element_text(size=12), axis.title = element_text(size=18),  axis.title.x = element_text(size=18), axis.title.y = element_text(size=18)) + labs(title = "Reciever operating curve for Triple Negative vs. Luminal or HER2+") + theme(axis.text=element_text(size=16, face="bold"), legend.title = element_text(size=18), legend.position = c(0.75, 0.3)) + guides(linetype = guide_legend(nrow = 2)) + theme(legend.background = element_rect(fill="white", size=0.25, linetype = "solid", color="black"))
+                   
+  ggsave("FigureROCTN.tiff", g1, dpi=300) 
+  ggsave("FigureROCTN.pdf", g1, dpi=300) 
+
+```
+
+
+
+Distinguish between Molecular subtype 4-way 
+
+```{r, echo=F, warning=F}
+
+  indxD <- train_set$MolecularSubtype.5way < 5
+  dataH <- train_set[indxD,]
+  
+   Response <- dataH$MolecularSubtype.5way
+   Response <- replace(Response, Response == 1, "LuminalORHER2")
+   Response <- replace(Response, Response == 2, "LuminalORHER2")
+   Response <- replace(Response, Response == 3, "TN")
+   Response <- replace(Response, Response == 4, "LuminalORHER2")
+   Response <- as.factor(Response)
+   
+  dataH$MolecularSubtype.5way <- Response
+  
+  featuredata <- dataH[, names(dataH) %in% c(fnamesAll, "MolecularSubtype.5way")]
+  
+  featuredata$MolecularSubtype.5way <- as.ordered(featuredata$MolecularSubtype.5way)
+  
+  fdata <- mRMR.data(data = data.frame(featuredata))
+  filter <- mRMR.classic("mRMRe.Filter", data = fdata, target_indices = 1, feature_count = round(length(fnamesAll)*0.8))
+  
+  t <- unlist(scores(filter), use.names=FALSE)
+  mi_threshold <- median(t[!is.na(t)])
+  
+  findx <- unlist(solutions(filter), use.names=FALSE)
+  findx <- findx-1
+
+   useIndx = rep(TRUE, length(findx))
+  for (i in 1 : length(findx)) {
+    
+    p <- wilcox.test(dataH[,names(dataH)%in% fnamesAll[findx[i]]] ~ MolecularSubtype.5way, data=dataH)
+    if(p$p.value > 0.05) {
+      useIndx[i] <- FALSE
+    }
+  }
+  
+  
+   
+   valResponse <- val_set$MolecularSubtype.5way
+   valResponse <- replace(valResponse, valResponse == 1, "LuminalORHER2")
+   valResponse <- replace(valResponse, valResponse == 2, "LuminalORHER2")
+   valResponse <- replace(valResponse, valResponse == 3, "TN")
+   valResponse <- replace(valResponse, valResponse == 4, "LuminalORHER2")
+   valResponse <- as.factor(valResponse)
+   
+   
+   #Preselect predictors 
+  print("GLMNET")
+  
+  objControl <- trainControl(method="repeatedcv", number = 10, repeats = 10, search = "grid")
+  eGrid <- expand.grid(.alpha = (1:10)*0.1, .lambda = seq(0.005, 0.1, by=0.005)) #seq(0.01,0.5, by=0.02)) 
+ 
+  objModelGLM <- train(dataH[, names(dataH) %in% fnamesAll[findx[useIndx]]], Response, method = 'glmnet', trControl = objControl, tuneGrid = eGrid)
+  plot(objModelGLM)
+  print(objModelGLM$results[objModelGLM$results$alpha==objModelGLM$bestTune$alpha & objModelGLM$results$lambda==objModelGLM$bestTune$lambda,])
+  
+  predictions <- predict(object = objModelGLM, val_set[, names(val_set) %in% fnamesAll[findx[useIndx]]])
+  confusionMatrix(predictions, valResponse)
+  
+   
+```
+
+
+
